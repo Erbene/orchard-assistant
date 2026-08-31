@@ -30,8 +30,8 @@ class ZoneService:
 
     async def create_zone(self, payload: ZoneCreate) -> ZoneRead:
         soil = await self._normalize("soil_drainage", payload.soil_drainage)
-        source = await self._normalize("source", payload.source)
-        row = self._repo.create(payload.name.strip(), soil, source)
+        water_source = await self._normalize("water_source", payload.water_source)
+        row = self._repo.create(payload.name.strip(), soil, water_source)
         return ZoneRead.model_validate(row)
 
     async def update_zone(self, zone_id: int, payload: ZoneUpdate) -> ZoneRead:
@@ -39,7 +39,7 @@ class ZoneService:
             raise NotFoundError(f"zone {zone_id} not found")
 
         patch = payload.model_dump(exclude_unset=True)
-        for key in ("soil_drainage", "source"):
+        for key in ("soil_drainage", "water_source"):
             if key in patch:
                 patch[key] = await self._normalize(key, patch[key])
         if "name" in patch and patch["name"] is not None:

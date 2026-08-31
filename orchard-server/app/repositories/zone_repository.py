@@ -11,8 +11,8 @@ from typing import Any
 
 Row = dict[str, Any]
 
-_COLUMNS = ("zone_id", "name", "soil_drainage", "source")
-_MUTABLE = ("name", "soil_drainage", "source")
+_COLUMNS = ("zone_id", "name", "soil_drainage", "water_source")
+_MUTABLE = ("name", "soil_drainage", "water_source")
 
 
 class ZoneRepository:
@@ -32,10 +32,10 @@ class ZoneRepository:
         cur = self._conn.execute("SELECT 1 FROM zone WHERE zone_id = ?", (zone_id,))
         return cur.fetchone() is not None
 
-    def create(self, name: str, soil_drainage: str | None, source: str | None) -> Row:
+    def create(self, name: str, soil_drainage: str | None, water_source: str | None) -> Row:
         cur = self._conn.execute(
-            "INSERT INTO zone (name, soil_drainage, source) VALUES (?, ?, ?)",
-            (name, soil_drainage, source),
+            "INSERT INTO zone (name, soil_drainage, water_source) VALUES (?, ?, ?)",
+            (name, soil_drainage, water_source),
         )
         row = self.get(int(cur.lastrowid))
         assert row is not None  # just inserted

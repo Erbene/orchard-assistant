@@ -1,6 +1,6 @@
 """Validation Agent interface + placeholder implementations.
 
-Domain fields (``species``, ``variety``, ``soil_drainage``, ``source``) are
+Domain fields (``species``, ``variety``, ``soil_drainage``, ``water_source``) are
 **free text**. There are no enums and no closed vocabularies - a value is never
 rejected for being "unrecognized". The agent's only job is light normalization
 (trim / collapse whitespace) and, in future, enrichment.

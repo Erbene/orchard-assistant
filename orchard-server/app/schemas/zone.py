@@ -15,9 +15,9 @@ class ZoneCreate(BaseModel):
         default=None,
         description="Free text, e.g. 'sandy fast draining', 'fast', 'heavy clay'.",
     )
-    source: str | None = Field(
+    water_source: str | None = Field(
         default=None,
-        description="Free text - where this record came from (survey, grower notes, …).",
+        description="Free text - irrigation water source (well, canal, municipal, rainwater, …).",
     )
 
 
@@ -28,7 +28,7 @@ class ZoneUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1)
     soil_drainage: str | None = None
-    source: str | None = None
+    water_source: str | None = None
 
 
 class ZoneRead(BaseModel):
@@ -37,4 +37,4 @@ class ZoneRead(BaseModel):
     zone_id: int
     name: str
     soil_drainage: str | None = None
-    source: str | None = None
+    water_source: str | None = None

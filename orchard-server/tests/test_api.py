@@ -47,23 +47,23 @@ def test_zone_crud_freetext_and_autoincrement(client):
     # zone_id is auto-assigned; arbitrary free text is accepted verbatim
     a = client.post(
         f"{API}/zones",
-        json={"name": "North block", "soil_drainage": "fast", "source": "2019 soil survey"},
+        json={"name": "North block", "soil_drainage": "fast", "water_source": "well + drip"},
     )
     assert a.status_code == 201, a.text
     a_body = a.json()
     assert isinstance(a_body["zone_id"], int)
     assert a_body["soil_drainage"] == "fast"       # not coerced to a vocab term
-    assert a_body["source"] == "2019 soil survey"
+    assert a_body["water_source"] == "well + drip"
 
     b = client.post(f"{API}/zones", json={"name": "South block", "soil_drainage": "heavy clay"})
     assert b.json()["zone_id"] == a_body["zone_id"] + 1   # increments
 
     zid = a_body["zone_id"]
     patched = client.patch(
-        f"{API}/zones/{zid}", json={"soil_drainage": "  well   drained  ", "source": "grower"}
+        f"{API}/zones/{zid}", json={"soil_drainage": "  well   drained  ", "water_source": "  canal  "}
     )
     assert patched.json()["soil_drainage"] == "well drained"  # whitespace collapsed only
-    assert patched.json()["source"] == "grower"
+    assert patched.json()["water_source"] == "canal"
 
     assert client.get(f"{API}/zones/{zid}").json()["name"] == "North block"
     assert client.delete(f"{API}/zones/{zid}").status_code == 204

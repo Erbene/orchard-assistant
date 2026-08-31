@@ -44,7 +44,7 @@ transaction (commit on success, rollback on exception).
 
 ## Free text, no enums
 
-Descriptive fields (`species`, `variety`, `soil_drainage`, `source`) are plain
+Descriptive fields (`species`, `variety`, `soil_drainage`, `water_source`) are plain
 `str` and are **stored exactly as typed** - no enums, no closed vocabularies,
 never rejected for being "unrecognized". Before a write, the **service** still
 awaits the **validation agent** hook
@@ -66,7 +66,7 @@ The only 422 the write path still raises is the tree → zone referential check
 (`zone_id` must exist).
 
 `zone_id` is an auto-incrementing integer assigned by the database; `POST
-/api/v1/zones` takes `{ name, soil_drainage?, source? }` with no id.
+/api/v1/zones` takes `{ name, soil_drainage?, water_source? }` with no id.
 
 ## MCP / agent reuse
 

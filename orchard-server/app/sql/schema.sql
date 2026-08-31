@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS zone (
     zone_id         INTEGER PRIMARY KEY,   -- auto-incrementing rowid alias
     name            TEXT NOT NULL,
     soil_drainage   TEXT,                  -- free text; canonicalized by the validation agent
-    source          TEXT                   -- free text; provenance of the zone record (survey, grower notes, …)
+    water_source    TEXT                   -- free text; irrigation water source for the zone (well, canal, municipal, …)
 );
 
 CREATE TABLE IF NOT EXISTS tree (
