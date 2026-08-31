@@ -1,27 +1,27 @@
 /**
  * Shared domain types. Mirrors the orchard-server (FastAPI) schemas.
- * Descriptive fields (`species`, `variety`, `soil_drainage`, `source`) are
- * free text - stored as typed, no enums, no coercion. `zone_id` is assigned
- * by the database (auto-increment).
+ * Descriptive fields (`species`, `variety`, `soil_drainage`, `water_source`)
+ * are free text - stored as typed, no enums, no coercion. `zone_id` is
+ * assigned by the database (auto-increment).
  */
 
 export interface Zone {
   zone_id: number;
   name: string;
   soil_drainage: string | null;
-  source: string | null;
+  water_source: string | null;
 }
 
 export interface ZoneInput {
   name: string;
   soil_drainage?: string | null;
-  source?: string | null;
+  water_source?: string | null;
 }
 
 export interface ZonePatch {
   name?: string;
   soil_drainage?: string | null;
-  source?: string | null;
+  water_source?: string | null;
 }
 
 export interface Tree {

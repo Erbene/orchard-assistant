@@ -21,7 +21,7 @@ export function ZoneEntityForm({ zone, onSaved, onCancel }: ZoneEntityFormProps)
 
   const [name, setName] = React.useState(zone?.name ?? "");
   const [soil, setSoil] = React.useState(zone?.soil_drainage ?? "");
-  const [source, setSource] = React.useState(zone?.source ?? "");
+  const [waterSource, setWaterSource] = React.useState(zone?.water_source ?? "");
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [formError, setFormError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
@@ -29,7 +29,7 @@ export function ZoneEntityForm({ zone, onSaved, onCancel }: ZoneEntityFormProps)
   React.useEffect(() => {
     setName(zone?.name ?? "");
     setSoil(zone?.soil_drainage ?? "");
-    setSource(zone?.source ?? "");
+    setWaterSource(zone?.water_source ?? "");
     setErrors({});
     setFormError(null);
   }, [zone]);
@@ -47,7 +47,7 @@ export function ZoneEntityForm({ zone, onSaved, onCancel }: ZoneEntityFormProps)
       const body = {
         name: name.trim(),
         soil_drainage: soil.trim() || null,
-        source: source.trim() || null,
+        water_source: waterSource.trim() || null,
       };
       const saved =
         isEdit && zone
@@ -61,7 +61,7 @@ export function ZoneEntityForm({ zone, onSaved, onCancel }: ZoneEntityFormProps)
       if (!isEdit) {
         setName("");
         setSoil("");
-        setSource("");
+        setWaterSource("");
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -117,20 +117,21 @@ export function ZoneEntityForm({ zone, onSaved, onCancel }: ZoneEntityFormProps)
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="zone-source">Source</Label>
+        <Label htmlFor="zone-water-source">Water Source</Label>
         <Input
-          id="zone-source"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-          aria-invalid={Boolean(errors.source)}
-          placeholder="2019 soil survey, grower notes, drone imagery…"
+          id="zone-water-source"
+          value={waterSource}
+          onChange={(e) => setWaterSource(e.target.value)}
+          aria-invalid={Boolean(errors.water_source)}
+          placeholder="well, canal, municipal, rainwater catchment…"
           autoComplete="off"
         />
-        {errors.source ? (
-          <p className="text-xs text-destructive">{errors.source}</p>
+        {errors.water_source ? (
+          <p className="text-xs text-destructive">{errors.water_source}</p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Free text — where this record came from. Stored exactly as typed.
+            Free text — irrigation water source for this zone. Stored exactly as
+            typed.
           </p>
         )}
       </div>
