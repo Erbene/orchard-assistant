@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+orchard.db
+*.db
+.pytest_cache/
