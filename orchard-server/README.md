@@ -115,8 +115,9 @@ is meant to stay.
 the service layer directly (one short-lived SQLite connection per call,
 wrapped in a transaction) — no HTTP calls to self.
 
-**Tools:** `list_zones`, `get_zone_details`, `list_trees`, `get_tree_details`,
-`create_tree`, `update_tree`, `delete_tree`.
+**Tools:** `list_zones`, `get_zone_details`, `create_zone`, `update_zone`,
+`delete_zone`, `list_trees`, `get_tree_details`, `create_tree`, `update_tree`,
+`delete_tree` — full CRUD for both entities.
 **Resource:** `orchard://system-summary` — plain-text zone/tree counts + status.
 
 Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as

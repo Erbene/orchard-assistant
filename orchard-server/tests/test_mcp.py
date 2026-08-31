@@ -6,13 +6,45 @@ and drives it with the MCP client's stdio transport.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 SERVER_ROOT = Path(__file__).resolve().parent.parent
+
+EXPECTED_TOOLS = {
+    "list_zones",
+    "get_zone_details",
+    "create_zone",
+    "update_zone",
+    "delete_zone",
+    "list_trees",
+    "get_tree_details",
+    "create_tree",
+    "update_tree",
+    "delete_tree",
+}
+
+
+def _payload(result: Any) -> Any:
+    """Best-effort extraction of a tool's return value across FastMCP shapes."""
+    sc = result.structuredContent
+    if isinstance(sc, dict):
+        return sc.get("result", sc)
+    if sc is not None:
+        return sc
+    for block in result.content:
+        text = getattr(block, "text", None)
+        if text:
+            try:
+                return json.loads(text)
+            except ValueError:
+                return text
+    return None
 
 
 async def _exercise(db_path: str) -> None:
@@ -28,30 +60,29 @@ async def _exercise(db_path: str) -> None:
             await session.initialize()
 
             tools = {t.name for t in (await session.list_tools()).tools}
-            assert {
-                "list_zones",
-                "get_zone_details",
-                "list_trees",
-                "get_tree_details",
-                "create_tree",
-                "update_tree",
-                "delete_tree",
-            } <= tools, tools
+            assert EXPECTED_TOOLS <= tools, tools
+
+            zone = await session.call_tool(
+                "create_zone",
+                {"name": "North Block", "soil_drainage": "sandy", "water_source": "well"},
+            )
+            assert not zone.isError, zone.content
+            zone_id = _payload(zone)["zone_id"]
 
             created = await session.call_tool(
-                "create_tree", {"species": "mango", "variety": "Kent"}
+                "create_tree",
+                {"species": "mango", "variety": "Kent", "zone_id": zone_id},
             )
             assert not created.isError, created.content
+            assert _payload(created)["zone_id"] == zone_id
 
-            listed = await session.call_tool("list_trees", {})
+            listed = await session.call_tool("list_trees", {"zone_id": zone_id})
             assert not listed.isError
-            payload = str(listed.structuredContent) + "".join(
-                getattr(c, "text", "") for c in listed.content
-            )
-            assert "Kent" in payload
+            assert _payload(listed)[0]["variety"] == "Kent"
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text
+            assert "Zones:            1" in body
             assert "Trees:            1" in body
             assert "mango: 1" in body
 

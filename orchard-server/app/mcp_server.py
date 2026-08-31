@@ -29,6 +29,7 @@ from .dependencies import _ensure_schema
 from .repositories.tree_repository import TreeRepository
 from .repositories.zone_repository import ZoneRepository
 from .schemas.tree import TreeCreate, TreeUpdate
+from .schemas.zone import ZoneCreate, ZoneUpdate
 from .services.exceptions import DomainError
 from .services.tree_service import TreeService
 from .services.validators import get_default_validation_agent
@@ -92,6 +93,90 @@ async def get_zone_details(zone_id: int) -> dict:
             return (await zones.get_zone(zone_id)).model_dump(mode="json")
         except DomainError as exc:
             raise ToolError(str(exc)) from exc
+
+
+@mcp.tool()
+async def create_zone(
+    name: str,
+    soil_drainage: str | None = None,
+    water_source: str | None = None,
+) -> dict:
+    """Create a new orchard zone and return the created row (with its new id).
+
+    All descriptive fields are free text and stored exactly as typed - there
+    is no controlled vocabulary.
+
+    Args:
+        name: Human-readable zone name, e.g. "North Block".
+        soil_drainage: Optional free text, e.g. "sandy", "heavy clay".
+        water_source: Optional free text irrigation source, e.g. "well",
+            "canal", "municipal".
+    """
+    with _session() as (zones, _):
+        try:
+            created = await zones.create_zone(
+                ZoneCreate(
+                    name=name,
+                    soil_drainage=soil_drainage,
+                    water_source=water_source,
+                )
+            )
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+        return created.model_dump(mode="json")
+
+
+@mcp.tool()
+async def update_zone(
+    zone_id: int,
+    name: str | None = None,
+    soil_drainage: str | None = None,
+    water_source: str | None = None,
+) -> dict:
+    """Update fields on an existing zone. Only the arguments you pass change.
+
+    Args:
+        zone_id: The zone to update.
+        name: New zone name.
+        soil_drainage: New free-text soil drainage.
+        water_source: New free-text water source.
+
+    Passing an argument as null/None leaves that field unchanged. Errors if
+    the zone does not exist.
+    """
+    patch = {
+        key: value
+        for key, value in {
+            "name": name,
+            "soil_drainage": soil_drainage,
+            "water_source": water_source,
+        }.items()
+        if value is not None
+    }
+    with _session() as (zones, _):
+        try:
+            updated = await zones.update_zone(zone_id, ZoneUpdate(**patch))
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+        return updated.model_dump(mode="json")
+
+
+@mcp.tool()
+async def delete_zone(zone_id: int) -> str:
+    """Permanently delete a zone.
+
+    Args:
+        zone_id: The zone to delete.
+
+    Returns a short confirmation string. Errors if the zone does not exist,
+    or if trees are still assigned to it (reassign or delete those first).
+    """
+    with _session() as (zones, _):
+        try:
+            await zones.delete_zone(zone_id)
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+        return f"Zone {zone_id} deleted."
 
 
 # ---------------------------------------------------------------------------
