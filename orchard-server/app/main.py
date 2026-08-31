@@ -16,6 +16,7 @@ from .api import api_router
 from .api.errors import register_exception_handlers
 from .config import get_settings
 from .dependencies import _ensure_schema
+from .mcp_server import mcp
 
 
 @asynccontextmanager
@@ -34,6 +35,11 @@ app = FastAPI(
 register_exception_handlers(app)
 # Versioned API namespace: /api/v1/zones, /api/v1/trees, /api/v1/chat
 app.include_router(api_router, prefix="/api/v1")
+
+# MCP server over SSE for web-based AI clients. The mounted sub-app exposes
+# GET /mcp/sse (event stream) and POST /mcp/messages/ (client -> server).
+# Stdio transport for desktop clients lives in app/mcp_server.py's __main__.
+app.mount("/mcp", mcp.sse_app())
 
 
 @app.get("/health", tags=["meta"])

@@ -11,6 +11,7 @@ app/
   config.py          Settings (env-driven, framework-free)
   db.py              sqlite connection + schema bootstrap (no HTTP, no Pydantic)
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
+  mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
   sql/schema.sql     DDL
 
   api/               HTTP LAYER - request/response, status codes, delegation only
@@ -106,6 +107,31 @@ returns a stub reply, token by token, so the transport and the `orchard-web`
 chat UI work end to end. Replace `ChatService.stream_reply` with a real agent
 loop — the signature (message history in, async iterator of text chunks out)
 is meant to stay.
+
+## MCP server
+
+[app/mcp_server.py](app/mcp_server.py) exposes the same `ZoneService` /
+`TreeService` logic as MCP tools + a resource, for AI-agent clients. It reuses
+the service layer directly (one short-lived SQLite connection per call,
+wrapped in a transaction) — no HTTP calls to self.
+
+**Tools:** `list_zones`, `get_zone_details`, `list_trees`, `get_tree_details`,
+`create_tree`, `update_tree`, `delete_tree`.
+**Resource:** `orchard://system-summary` — plain-text zone/tree counts + status.
+
+Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as
+`ToolError`, so the client sees a clean message, not a stack trace.
+
+Two transports:
+
+| Transport | How | Client URL |
+| --------- | --- | ---------- |
+| **SSE** | mounted on the FastAPI app (`app.mount("/mcp", mcp.sse_app())`) | `http://127.0.0.1:8000/mcp/sse` |
+| **stdio** | `python -m app.mcp_server` | — (Claude Desktop / Cursor) |
+
+For Claude Desktop, drop [claude_desktop_config.json](claude_desktop_config.json)
+into `%APPDATA%\Claude\claude_desktop_config.json` (merge the `mcpServers` key)
+and restart the app.
 
 ## Run
 

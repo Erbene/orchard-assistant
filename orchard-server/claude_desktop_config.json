@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "orchard": {
+      "command": "C:\\repos\\orchard-assistant\\orchard-server\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "C:\\repos\\orchard-assistant\\orchard-server",
+      "env": {
+        "PYTHONPATH": "C:\\repos\\orchard-assistant\\orchard-server",
+        "ORCHARD_DB_PATH": "C:\\repos\\orchard-assistant\\orchard-server\\orchard.db"
+      }
+    }
+  }
+}
