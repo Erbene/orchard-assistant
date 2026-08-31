@@ -1,0 +1,55 @@
+"""Raw persistence for the ``zone`` table.
+
+Repositories deal only in primitives and ``dict`` rows. No Pydantic, no
+business rules, no HTTP. Integrity violations propagate as
+``sqlite3.IntegrityError`` for the service layer to interpret.
+"""
+from __future__ import annotations
+
+import sqlite3
+from typing import Any
+
+Row = dict[str, Any]
+
+_COLUMNS = ("zone_id", "name", "soil_drainage")
+
+
+class ZoneRepository:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def list(self) -> list[Row]:
+        cur = self._conn.execute("SELECT * FROM zone ORDER BY zone_id")
+        return [dict(r) for r in cur.fetchall()]
+
+    def get(self, zone_id: str) -> Row | None:
+        cur = self._conn.execute("SELECT * FROM zone WHERE zone_id = ?", (zone_id,))
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+
+    def exists(self, zone_id: str) -> bool:
+        cur = self._conn.execute("SELECT 1 FROM zone WHERE zone_id = ?", (zone_id,))
+        return cur.fetchone() is not None
+
+    def create(self, zone_id: str, name: str, soil_drainage: str | None) -> Row:
+        self._conn.execute(
+            "INSERT INTO zone (zone_id, name, soil_drainage) VALUES (?, ?, ?)",
+            (zone_id, name, soil_drainage),
+        )
+        row = self.get(zone_id)
+        assert row is not None  # just inserted
+        return row
+
+    def update(self, zone_id: str, fields: Row) -> Row | None:
+        allowed = {k: v for k, v in fields.items() if k in _COLUMNS and k != "zone_id"}
+        if allowed:
+            assignments = ", ".join(f"{k} = ?" for k in allowed)
+            self._conn.execute(
+                f"UPDATE zone SET {assignments} WHERE zone_id = ?",
+                (*allowed.values(), zone_id),
+            )
+        return self.get(zone_id)
+
+    def delete(self, zone_id: str) -> bool:
+        cur = self._conn.execute("DELETE FROM zone WHERE zone_id = ?", (zone_id,))
+        return cur.rowcount > 0
