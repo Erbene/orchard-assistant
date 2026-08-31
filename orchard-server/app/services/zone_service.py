@@ -22,52 +22,49 @@ class ZoneService:
     async def list_zones(self) -> list[ZoneRead]:
         return [ZoneRead.model_validate(r) for r in self._repo.list()]
 
-    async def get_zone(self, zone_id: str) -> ZoneRead:
+    async def get_zone(self, zone_id: int) -> ZoneRead:
         row = self._repo.get(zone_id)
         if row is None:
-            raise NotFoundError(f"zone {zone_id!r} not found")
+            raise NotFoundError(f"zone {zone_id} not found")
         return ZoneRead.model_validate(row)
 
     async def create_zone(self, payload: ZoneCreate) -> ZoneRead:
-        soil = await self._canonicalize("soil_drainage", payload.soil_drainage)
-        try:
-            row = self._repo.create(payload.zone_id, payload.name.strip(), soil)
-        except sqlite3.IntegrityError as exc:
-            raise ConflictError(f"zone {payload.zone_id!r} already exists") from exc
+        soil = await self._normalize("soil_drainage", payload.soil_drainage)
+        source = await self._normalize("source", payload.source)
+        row = self._repo.create(payload.name.strip(), soil, source)
         return ZoneRead.model_validate(row)
 
-    async def update_zone(self, zone_id: str, payload: ZoneUpdate) -> ZoneRead:
+    async def update_zone(self, zone_id: int, payload: ZoneUpdate) -> ZoneRead:
         if self._repo.get(zone_id) is None:
-            raise NotFoundError(f"zone {zone_id!r} not found")
+            raise NotFoundError(f"zone {zone_id} not found")
 
         patch = payload.model_dump(exclude_unset=True)
-        if "soil_drainage" in patch:
-            patch["soil_drainage"] = await self._canonicalize(
-                "soil_drainage", patch["soil_drainage"]
-            )
+        for key in ("soil_drainage", "source"):
+            if key in patch:
+                patch[key] = await self._normalize(key, patch[key])
         if "name" in patch and patch["name"] is not None:
             patch["name"] = patch["name"].strip()
 
         row = self._repo.update(zone_id, patch)
         return ZoneRead.model_validate(row)
 
-    async def delete_zone(self, zone_id: str) -> None:
+    async def delete_zone(self, zone_id: int) -> None:
         if self._repo.get(zone_id) is None:
-            raise NotFoundError(f"zone {zone_id!r} not found")
+            raise NotFoundError(f"zone {zone_id} not found")
         try:
             self._repo.delete(zone_id)
         except sqlite3.IntegrityError as exc:
             raise ConflictError(
-                f"zone {zone_id!r} is still referenced by one or more trees"
+                f"zone {zone_id} is still referenced by one or more trees"
             ) from exc
 
     # -- helpers ---------------------------------------------------------
 
-    async def _canonicalize(self, field: str, value: str | None) -> str | None:
-        """Run the validation agent hook; raise on a domain-invalid value."""
+    async def _normalize(self, field: str, value: str | None) -> str | None:
+        """Run the validation-agent hook (free text - normalization only)."""
         if value is None:
             return None
         outcome = await self._validator.validate(field, value)
-        if not outcome.is_valid:
+        if not outcome.is_valid:  # passthrough agent never trips this
             raise DomainValidationError(field, outcome.reason or "invalid value")
-        return outcome.canonical
+        return outcome.canonical or None

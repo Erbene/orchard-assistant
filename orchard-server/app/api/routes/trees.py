@@ -13,7 +13,7 @@ router = APIRouter(prefix="/trees", tags=["trees"])
 @router.get("", response_model=list[TreeRead])
 async def list_trees(
     species: str | None = Query(default=None),
-    zone_id: str | None = Query(default=None),
+    zone_id: int | None = Query(default=None),
     service: TreeService = Depends(get_tree_service),
 ):
     return await service.list_trees(species=species, zone_id=zone_id)

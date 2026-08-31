@@ -23,7 +23,7 @@ class TreeRepository:
         self._conn = conn
 
     def list(
-        self, *, species: str | None = None, zone_id: str | None = None
+        self, *, species: str | None = None, zone_id: int | None = None
     ) -> list[Row]:
         clauses: list[str] = []
         params: list[Any] = []

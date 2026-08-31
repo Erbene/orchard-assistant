@@ -17,7 +17,7 @@ async def list_zones(service: ZoneService = Depends(get_zone_service)):
 
 
 @router.get("/{zone_id}", response_model=ZoneRead)
-async def get_zone(zone_id: str, service: ZoneService = Depends(get_zone_service)):
+async def get_zone(zone_id: int, service: ZoneService = Depends(get_zone_service)):
     return await service.get_zone(zone_id)
 
 
@@ -30,7 +30,7 @@ async def create_zone(
 
 @router.patch("/{zone_id}", response_model=ZoneRead)
 async def update_zone(
-    zone_id: str,
+    zone_id: int,
     payload: ZoneUpdate,
     service: ZoneService = Depends(get_zone_service),
 ):
@@ -40,5 +40,5 @@ async def update_zone(
 @router.delete(
     "/{zone_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
 )
-async def delete_zone(zone_id: str, service: ZoneService = Depends(get_zone_service)):
+async def delete_zone(zone_id: int, service: ZoneService = Depends(get_zone_service)):
     await service.delete_zone(zone_id)

@@ -11,6 +11,8 @@ from app.config import Settings
 from app.dependencies import _initialized, get_settings_dep
 from app.main import app
 
+API = "/api/v1"
+
 
 @pytest.fixture()
 def client(tmp_path: Path):
@@ -27,53 +29,75 @@ def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_zone_crud_and_canonicalization(client):
-    # free-text synonym -> canonical form
-    r = client.post("/zones", json={"zone_id": "north", "name": "North block", "soil_drainage": "sandy"})
-    assert r.status_code == 201, r.text
-    assert r.json()["soil_drainage"] == "sandy_fast_draining"
+def test_chat_streams_stub_reply(client):
+    r = client.post(
+        f"{API}/chat", json={"messages": [{"role": "user", "content": "hello there"}]}
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    body = r.text
+    assert '"type":"start"' in body
+    assert '"type":"text-delta"' in body
+    assert '"finishReason":"stub"' in body
+    # stub echoes the last user message (streamed across chunks)
+    assert "asked:" in body and "hello" in body
 
-    # duplicate id -> 409 from ConflictError
-    assert client.post("/zones", json={"zone_id": "north", "name": "dup"}).status_code == 409
 
-    # unknown categorical value -> 422 from DomainValidationError
-    bad = client.post("/zones", json={"zone_id": "z9", "name": "x", "soil_drainage": "quicksand"})
-    assert bad.status_code == 422
-    assert bad.json()["field"] == "soil_drainage"
+def test_zone_crud_freetext_and_autoincrement(client):
+    # zone_id is auto-assigned; arbitrary free text is accepted verbatim
+    a = client.post(
+        f"{API}/zones",
+        json={"name": "North block", "soil_drainage": "fast", "source": "2019 soil survey"},
+    )
+    assert a.status_code == 201, a.text
+    a_body = a.json()
+    assert isinstance(a_body["zone_id"], int)
+    assert a_body["soil_drainage"] == "fast"       # not coerced to a vocab term
+    assert a_body["source"] == "2019 soil survey"
 
-    assert client.patch("/zones/north", json={"soil_drainage": "loam"}).json()["soil_drainage"] == "loamy"
-    assert client.get("/zones/north").json()["name"] == "North block"
-    assert client.delete("/zones/north").status_code == 204
-    assert client.get("/zones/north").status_code == 404
+    b = client.post(f"{API}/zones", json={"name": "South block", "soil_drainage": "heavy clay"})
+    assert b.json()["zone_id"] == a_body["zone_id"] + 1   # increments
+
+    zid = a_body["zone_id"]
+    patched = client.patch(
+        f"{API}/zones/{zid}", json={"soil_drainage": "  well   drained  ", "source": "grower"}
+    )
+    assert patched.json()["soil_drainage"] == "well drained"  # whitespace collapsed only
+    assert patched.json()["source"] == "grower"
+
+    assert client.get(f"{API}/zones/{zid}").json()["name"] == "North block"
+    assert client.delete(f"{API}/zones/{zid}").status_code == 204
+    assert client.get(f"{API}/zones/{zid}").status_code == 404
 
 
 def test_tree_crud_age_and_fk(client):
-    client.post("/zones", json={"zone_id": "z1", "name": "Zone 1"})
+    zid = client.post(f"{API}/zones", json={"name": "Zone 1"}).json()["zone_id"]
 
     r = client.post(
-        "/trees",
-        json={"species": "Custard Apple", "variety": "gefner", "zone_id": "z1", "planted_date": "2020-01-01"},
+        f"{API}/trees",
+        json={"species": "custard apple", "variety": "gefner", "zone_id": zid, "planted_date": "2020-01-01"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
     tid = body["tree_id"]
-    assert body["species"] == "sugar_apple"      # synonym canonicalized
-    assert body["variety"] == "Gefner"           # open text, title-cased
+    assert body["species"] == "custard apple"     # stored as typed
+    assert body["variety"] == "gefner"
+    assert body["zone_id"] == zid
     assert body["age_days"] > 2000 and body["age_years"] >= 5
 
-    # unknown zone -> 422
-    assert client.post("/trees", json={"species": "mango", "variety": "x", "zone_id": "nope"}).status_code == 422
-    # unrecognized species -> 422
-    assert client.post("/trees", json={"species": "banana", "variety": "x"}).status_code == 422
+    # unknown zone -> 422 (referential check, not a vocabulary check)
+    assert client.post(
+        f"{API}/trees", json={"species": "mango", "variety": "x", "zone_id": 9999}
+    ).status_code == 422
 
-    r = client.patch(f"/trees/{tid}", json={"variety": "nam doc mai", "notes": "grafted"})
-    assert r.json()["variety"] == "Nam Doc Mai"
+    r = client.patch(f"{API}/trees/{tid}", json={"variety": "nam doc mai", "notes": "grafted"})
+    assert r.json()["variety"] == "nam doc mai"
     assert r.json()["notes"] == "grafted"
 
-    assert len(client.get("/trees", params={"zone_id": "z1"}).json()) == 1
-    assert client.get("/trees", params={"species": "sapodilla"}).json() == []
+    assert len(client.get(f"{API}/trees", params={"zone_id": zid}).json()) == 1
+    assert client.get(f"{API}/trees", params={"species": "sapodilla"}).json() == []
 
     # zone still referenced -> 409
-    assert client.delete("/zones/z1").status_code == 409
-    assert client.delete(f"/trees/{tid}").status_code == 204
-    assert client.get(f"/trees/{tid}").status_code == 404
+    assert client.delete(f"{API}/zones/{zid}").status_code == 409
+    assert client.delete(f"{API}/trees/{tid}").status_code == 204
+    assert client.get(f"{API}/trees/{tid}").status_code == 404

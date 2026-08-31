@@ -1,4 +1,4 @@
-"""Tree business logic: free-text canonicalization, referential checks,
+"""Tree business logic: free-text normalization, referential checks,
 and derived age. HTTP-agnostic; returns Pydantic models."""
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class TreeService:
         self._validator = validator
 
     async def list_trees(
-        self, *, species: str | None = None, zone_id: str | None = None
+        self, *, species: str | None = None, zone_id: int | None = None
     ) -> list[TreeRead]:
         rows = self._trees.list(species=species, zone_id=zone_id)
         return [self._to_read(r) for r in rows]
@@ -50,8 +50,8 @@ class TreeService:
     async def create_tree(self, payload: TreeCreate) -> TreeRead:
         record = {
             "tree_id": payload.tree_id,
-            "species": await self._require_canonical("species", payload.species),
-            "variety": await self._require_canonical("variety", payload.variety),
+            "species": await self._normalize("species", payload.species),
+            "variety": await self._normalize("variety", payload.variety),
             "zone_id": await self._check_zone(payload.zone_id),
             "planted_date": payload.planted_date.isoformat() if payload.planted_date else None,
             "additional_context": payload.additional_context,
@@ -69,9 +69,9 @@ class TreeService:
 
         patch = payload.model_dump(exclude_unset=True)
         if "species" in patch:
-            patch["species"] = await self._require_canonical("species", patch["species"])
+            patch["species"] = await self._normalize("species", patch["species"])
         if "variety" in patch:
-            patch["variety"] = await self._require_canonical("variety", patch["variety"])
+            patch["variety"] = await self._normalize("variety", patch["variety"])
         if "zone_id" in patch:
             patch["zone_id"] = await self._check_zone(patch["zone_id"])
         if "planted_date" in patch and patch["planted_date"] is not None:
@@ -86,17 +86,18 @@ class TreeService:
 
     # -- helpers -------------------------------------------------------
 
-    async def _require_canonical(self, field: str, value: str) -> str:
+    async def _normalize(self, field: str, value: str) -> str:
+        """Free-text normalization hook (never rejects with the default agent)."""
         outcome = await self._validator.validate(field, value)
         if not outcome.is_valid:
             raise DomainValidationError(field, outcome.reason or "invalid value")
         return outcome.canonical
 
-    async def _check_zone(self, zone_id: str | None) -> str | None:
+    async def _check_zone(self, zone_id: int | None) -> int | None:
         if zone_id is None:
             return None
         if not self._zones.exists(zone_id):
-            raise DomainValidationError("zone_id", f"zone {zone_id!r} does not exist")
+            raise DomainValidationError("zone_id", f"zone {zone_id} does not exist")
         return zone_id
 
     @staticmethod

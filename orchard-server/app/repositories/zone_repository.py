@@ -11,7 +11,8 @@ from typing import Any
 
 Row = dict[str, Any]
 
-_COLUMNS = ("zone_id", "name", "soil_drainage")
+_COLUMNS = ("zone_id", "name", "soil_drainage", "source")
+_MUTABLE = ("name", "soil_drainage", "source")
 
 
 class ZoneRepository:
@@ -22,26 +23,26 @@ class ZoneRepository:
         cur = self._conn.execute("SELECT * FROM zone ORDER BY zone_id")
         return [dict(r) for r in cur.fetchall()]
 
-    def get(self, zone_id: str) -> Row | None:
+    def get(self, zone_id: int) -> Row | None:
         cur = self._conn.execute("SELECT * FROM zone WHERE zone_id = ?", (zone_id,))
         row = cur.fetchone()
         return dict(row) if row is not None else None
 
-    def exists(self, zone_id: str) -> bool:
+    def exists(self, zone_id: int) -> bool:
         cur = self._conn.execute("SELECT 1 FROM zone WHERE zone_id = ?", (zone_id,))
         return cur.fetchone() is not None
 
-    def create(self, zone_id: str, name: str, soil_drainage: str | None) -> Row:
-        self._conn.execute(
-            "INSERT INTO zone (zone_id, name, soil_drainage) VALUES (?, ?, ?)",
-            (zone_id, name, soil_drainage),
+    def create(self, name: str, soil_drainage: str | None, source: str | None) -> Row:
+        cur = self._conn.execute(
+            "INSERT INTO zone (name, soil_drainage, source) VALUES (?, ?, ?)",
+            (name, soil_drainage, source),
         )
-        row = self.get(zone_id)
+        row = self.get(int(cur.lastrowid))
         assert row is not None  # just inserted
         return row
 
-    def update(self, zone_id: str, fields: Row) -> Row | None:
-        allowed = {k: v for k, v in fields.items() if k in _COLUMNS and k != "zone_id"}
+    def update(self, zone_id: int, fields: Row) -> Row | None:
+        allowed = {k: v for k, v in fields.items() if k in _MUTABLE}
         if allowed:
             assignments = ", ".join(f"{k} = ?" for k in allowed)
             self._conn.execute(
@@ -50,6 +51,6 @@ class ZoneRepository:
             )
         return self.get(zone_id)
 
-    def delete(self, zone_id: str) -> bool:
+    def delete(self, zone_id: int) -> bool:
         cur = self._conn.execute("DELETE FROM zone WHERE zone_id = ?", (zone_id,))
         return cur.rowcount > 0

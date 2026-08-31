@@ -32,7 +32,8 @@ app = FastAPI(
 )
 
 register_exception_handlers(app)
-app.include_router(api_router)
+# Versioned API namespace: /api/v1/zones, /api/v1/trees, /api/v1/chat
+app.include_router(api_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["meta"])

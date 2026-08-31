@@ -1,8 +1,8 @@
 """Zone transport models.
 
-Categorical fields (``soil_drainage``) are plain ``str`` - no enums. The
-service layer hands them to the validation agent, which decides whether the
-value is domain-valid and returns a canonical form.
+All descriptive fields are free text - no enums, no closed vocabularies. The
+service layer runs them through the validation agent only for light
+normalization. ``zone_id`` is assigned by the database (auto-increment).
 """
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ZoneCreate(BaseModel):
-    zone_id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1)
     soil_drainage: str | None = Field(
         default=None,
-        description="Free text, e.g. 'sandy fast draining', 'loam'. Canonicalized on write.",
+        description="Free text, e.g. 'sandy fast draining', 'fast', 'heavy clay'.",
+    )
+    source: str | None = Field(
+        default=None,
+        description="Free text - where this record came from (survey, grower notes, …).",
     )
 
 
@@ -25,11 +28,13 @@ class ZoneUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1)
     soil_drainage: str | None = None
+    source: str | None = None
 
 
 class ZoneRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    zone_id: str
+    zone_id: int
     name: str
     soil_drainage: str | None = None
+    source: str | None = None

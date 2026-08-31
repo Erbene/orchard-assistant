@@ -30,6 +30,7 @@ from .config import Settings, get_settings
 from .db import connect, init_db
 from .repositories.tree_repository import TreeRepository
 from .repositories.zone_repository import ZoneRepository
+from .services.chat_service import ChatService
 from .services.tree_service import TreeService
 from .services.validators import ValidationAgent, get_default_validation_agent
 from .services.zone_service import ZoneService
@@ -94,3 +95,7 @@ def get_tree_service(
     validator: ValidationAgent = Depends(get_validation_agent),
 ) -> TreeService:
     return TreeService(trees, zones, validator)
+
+
+def get_chat_service() -> ChatService:
+    return ChatService()
