@@ -14,6 +14,9 @@ from pathlib import Path
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "orchard.db"
 
 
+_ROOT = Path(__file__).resolve().parent.parent
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: str = field(
@@ -21,6 +24,13 @@ class Settings:
     )
     schema_path: str = field(
         default_factory=lambda: str(Path(__file__).with_name("sql") / "schema.sql")
+    )
+    # RAG knowledge base
+    chroma_path: str = field(
+        default_factory=lambda: os.environ.get("ORCHARD_CHROMA_PATH", str(_ROOT / "chroma"))
+    )
+    uploads_dir: str = field(
+        default_factory=lambda: os.environ.get("ORCHARD_UPLOADS_DIR", str(_ROOT / "uploads"))
     )
 
 

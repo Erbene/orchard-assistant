@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { LinkedSources } from "@/components/trees/linked-sources";
 import { ApiError, treesApi } from "@/lib/api";
 import type { Tree, TreeInput, Zone } from "@/lib/types";
 
@@ -207,6 +208,12 @@ export function TreeEntityForm({
           onChange={(e) => set("notes", e.target.value || null)}
         />
       </Field>
+
+      {isEdit && tree && (
+        <div className="border-t pt-4">
+          <LinkedSources treeId={tree.tree_id} />
+        </div>
+      )}
 
       {formError && (
         <p

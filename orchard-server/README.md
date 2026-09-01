@@ -15,24 +15,21 @@ app/
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
   mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
   sql/schema.sql     DDL
+  rag/               chunking, file text extraction, ChromaDB wrapper
+  agent/             LangGraph orchestration skeleton (state / graph / MCP client)
 
   api/               HTTP LAYER - request/response, status codes, delegation only
-    __init__.py        aggregate router
-    errors.py          domain exception -> HTTP status mapping
-    routes/
-      zones.py
-      trees.py
+    routes/          zones.py  trees.py  sources.py  chat.py
 
   schemas/           Pydantic transport models (free-text str, no enums)
-    zone.py  tree.py  task.py  user_context.py
+    zone.py  tree.py  task.py  source.py  chat.py
 
   services/          BUSINESS LOGIC - HTTP-agnostic, returns Pydantic/plain objects
-    zone_service.py  tree_service.py  task_service.py  user_service.py
-    validators.py      Validation Agent interface + placeholder implementations
-    exceptions.py      DomainError / NotFoundError / ConflictError / DomainValidationError
+    zone_service.py  tree_service.py  task_service.py  source_service.py  chat_service.py
+    validators.py  exceptions.py
 
   repositories/      PERSISTENCE - raw SQL only, dict rows in/out
-    zone_repository.py  tree_repository.py  task_repository.py  user_repository.py
+    zone_repository.py  tree_repository.py  task_repository.py  source_repository.py
 ```
 
 **Dependency flow (per request):**
@@ -87,30 +84,59 @@ All API routes are mounted under **`/api/v1`** (`GET /health` is not). The
 | `POST`   | `/api/v1/zones`, `/api/v1/trees` | 201; `zone_id`/`tree_id` auto-assigned; 422 only if a tree names a non-existent `zone_id` |
 | `PATCH`  | `/api/v1/zones/{id}`, `/api/v1/trees/{id}` | partial; only supplied fields change |
 | `DELETE` | `/api/v1/zones/{id}`, `/api/v1/trees/{id}` | 204; 409 deleting a zone a tree still references |
+| `GET/POST` | `/api/v1/sources` | KB sources; `POST` is `multipart/form-data` (`name` + `text` OR `file`) |
+| `GET` | `/api/v1/sources/{id}` | includes `raw_content` |
+| `PATCH/DELETE` | `/api/v1/sources/{id}` | rename (`{name}`) / delete (also purges Chroma chunks) |
+| `GET/PUT` | `/api/v1/trees/{id}/sources` | list / replace the sources linked to a tree |
 
 Tree `age_days` / `age_years` are derived from `planted_date` on read, never stored.
 
-### Tasks (Phase 1 — service + MCP only)
+### Tasks (JIT scheduling model — service + MCP only)
 
-`task` (FK → `tree`, `ON DELETE CASCADE`) and singleton `user_context` tables,
-with `TaskRepository` / `UserRepository`, `TaskService` / `UserService`, and
-DI factories in `dependencies.py`. **No REST routers yet** — Phase 2 adds
-`/api/v1/tasks`. Today tasks are reachable through the MCP tools below.
+`task` (FK → `tree`, `ON DELETE CASCADE`), reached through the MCP tools below.
+**No REST routers yet.** `user_context` was **dropped** — scheduling
+constraints (available minutes, resources) are now gathered *just in time* in
+conversation by the agent, not stored.
 
 - `task`: `id`, `tree_id`, `action_type` (free text), `status`
   (`pending`/`completed`/`deferred` — a real state field, so it *is*
   constrained), `priority_score` (float), `scheduled_date` (ISO datetime, nullable),
-  `frequency_days` (int, nullable — set = recurring), `created_at`, `completed_at`.
-- `user_context`: `available_labor_hours_per_day` (float),
-  `available_products` (JSON list of strings), `updated_at`.
-- `TaskService` owns transitions: `create_task` (FK-checked), `mark_complete`
-  (stamps `completed_at`, spawns the next occurrence for recurring tasks),
-  `defer_task`, `batch_update_priorities` (atomic), `create_baseline_tasks`.
-- `TaskRepository.list_pending(scheduled_before=…)` — pending only, ordered by
-  `priority_score` DESC; the date filter keeps due-by tasks plus unscheduled ones.
+  `frequency_days` (int, nullable — set = recurring), **`estimated_minutes`**
+  (int, nullable), **`required_resources`** (JSON list of free-text names),
+  `created_at`, `completed_at`.
+- `TaskService`: `create_task` (FK-checked), `mark_complete` (stamps
+  `completed_at`, spawns the next occurrence — carries minutes + resources
+  forward), `defer_task`, `batch_update_priorities` (atomic),
+  `create_baseline_tasks(tree_id, items)` — items are **LLM-supplied** and each
+  MUST carry `estimated_minutes` + `required_resources`.
+- `TaskRepository.list_pending(scheduled_before=…)` — pending only, `priority_score`
+  DESC; the date filter keeps due-by tasks plus unscheduled ones.
 
-Adding these two tables needs **no migration** — `CREATE TABLE IF NOT EXISTS`
-in `schema.sql` picks them up on the next start for an existing `orchard.db`.
+**No manual migration:** `init_db` runs the DDL (`DROP TABLE IF EXISTS
+user_context`, `CREATE TABLE IF NOT EXISTS sources/tree_sources`) and
+`ALTER TABLE task ADD COLUMN` for the two new columns on an existing DB.
+
+### Knowledge base (Consensus Fusion RAG)
+
+`sources` (`id`, `name`, `source_type` `file`|`text`, `file_path`,
+`raw_content`, `upload_date`) + `tree_sources` (`tree_id`, `source_id`) mapping.
+`POST /api/v1/sources` extracts text (PDF via `pypdf`, MD/TXT decoded), chunks
+it (`app/rag/chunking.py`), and adds every chunk to one ChromaDB collection
+with `metadata = {"source_id": <id>}`. `search_ag_knowledge` (MCP) then runs an
+**independent** vector search per linked source and returns the results grouped
+under `--- SOURCE {id} ---` headers, so the agent does the fusion itself.
+Chroma persists at `ORCHARD_CHROMA_PATH` (default `./chroma`); uploaded files at
+`ORCHARD_UPLOADS_DIR`. First ingest downloads the MiniLM embedding model (~80 MB).
+
+### Agent skeleton (`app/agent/`)
+
+LangGraph `StateGraph(AgentState)` — `AgentState = {messages, active_tree_id,
+available_minutes, confirmed_resources}`. Nodes `orchestrator` → `{agronomist,
+foreman}`; the **Foreman** node does the JIT multi-turn check (returns a
+question and ends the turn when `available_minutes` is `None`). Nodes are stubs
+(no LLM); `app/agent/client.py` binds the MCP tools via
+`langchain-mcp-adapters`. LangSmith tracing via `LANGCHAIN_*` env vars — see
+`.env.example`.
 
 ### Chat (SSE)
 
@@ -139,11 +165,13 @@ wrapped in a transaction) — no HTTP calls to self.
 **Tools:**
 - zones — `list_zones`, `get_zone_details`, `create_zone`, `update_zone`, `delete_zone`
 - trees — `list_trees`, `get_tree_details`, `create_tree`, `update_tree`, `delete_tree`
-- tasks (Foreman agent) — `get_pending_tasks`, `get_task_details`, `create_task`,
+- tasks (Foreman) — `get_pending_tasks`, `get_task_details`, `create_task`,
   `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`, `defer_task`
-- constraints — `get_user_constraints`, `update_user_constraints`
+  (`create_task` / `create_baseline_tasks` require the LLM to supply
+  `estimated_minutes` + `required_resources`)
+- knowledge (Agronomist) — `search_ag_knowledge(tree_id, query)` — consensus-fusion RAG
 
-**Resource:** `orchard://system-summary` — plain-text zone/tree/task counts + status.
+**Resource:** `orchard://system-summary` — zone/tree/task/source counts + status.
 
 Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as
 `ToolError`, so the client sees a clean message, not a stack trace.

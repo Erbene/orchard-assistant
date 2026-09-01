@@ -1,7 +1,7 @@
 """Model Context Protocol server for the orchard backend.
 
 Exposes the same domain logic the REST API uses (``ZoneService`` /
-``TreeService`` / ``TaskService`` / ``UserService``) as MCP tools + a
+``TreeService`` / ``TaskService`` / ``SourceService``) as MCP tools + a
 resource, so AI agents can read and mutate orchard data without going through
 HTTP.
 
@@ -29,18 +29,18 @@ from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 from .config import get_settings
 from .db import connect
 from .dependencies import _ensure_schema
+from .rag.vector_store import get_vector_store
+from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
-from .repositories.user_repository import UserRepository
 from .repositories.zone_repository import ZoneRepository
-from .schemas.task import TaskCreate, TaskPriorityUpdate
+from .schemas.task import TaskBaselineItem, TaskCreate, TaskPriorityUpdate
 from .schemas.tree import TreeCreate, TreeUpdate
-from .schemas.user_context import UserContextUpdate
 from .schemas.zone import ZoneCreate, ZoneUpdate
 from .services.exceptions import DomainError
+from .services.source_service import SourceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
-from .services.user_service import UserService
 from .services.validators import get_default_validation_agent
 from .services.zone_service import ZoneService
 
@@ -52,7 +52,7 @@ class _Services:
     zones: ZoneService
     trees: TreeService
     tasks: TaskService
-    users: UserService
+    sources: SourceService
 
 
 @contextlib.contextmanager
@@ -66,13 +66,15 @@ def _session() -> Iterator[_Services]:
     zone_repo = ZoneRepository(conn)
     tree_repo = TreeRepository(conn)
     task_repo = TaskRepository(conn)
-    user_repo = UserRepository(conn)
+    source_repo = SourceRepository(conn)
     try:
         yield _Services(
             zones=ZoneService(zone_repo, validator),
             trees=TreeService(tree_repo, zone_repo, validator),
             tasks=TaskService(task_repo, tree_repo),
-            users=UserService(user_repo),
+            sources=SourceService(
+                source_repo, tree_repo, get_vector_store(settings), settings
+            ),
         )
         conn.commit()
     except Exception:
@@ -343,8 +345,9 @@ async def get_pending_tasks(scheduled_before: str | None = None) -> list[dict]:
     """Retrieve the current task queue: every task whose status is ``pending``,
     ordered by ``priority_score`` descending (most urgent first).
 
-    This is the Foreman agent's primary read - the work backlog it must
-    schedule against the user's labor and product constraints.
+    This is the Foreman agent's primary read - the work backlog it fits, at
+    conversation time, into the minutes and resources the user has just stated
+    (the JIT scheduling model).
 
     Args:
         scheduled_before: Optional ISO-8601 date or datetime (e.g.
@@ -384,6 +387,8 @@ async def get_task_details(task_id: int) -> dict:
 async def create_task(
     tree_id: int,
     action_type: str,
+    estimated_minutes: int,
+    required_resources: list[str],
     priority_score: float = 0.0,
     scheduled_date: str | None = None,
     frequency_days: int | None = None,
@@ -395,14 +400,17 @@ async def create_task(
             tree does not exist.
         action_type: Free-text work type, e.g. "prune", "fertilize",
             "irrigate", "scout_pests". No controlled vocabulary.
+        estimated_minutes: Your best estimate of the hands-on labor time in
+            minutes. REQUIRED - the JIT scheduler fits tasks into the time the
+            user says they have.
+        required_resources: List of free-text product/equipment names the task
+            needs (e.g. ["pruning saw", "10-10-10 fertilizer"]). Pass an empty
+            list if nothing special is needed. REQUIRED.
         priority_score: Relative urgency; higher sorts earlier in the queue.
-            Defaults to 0.0.
-        scheduled_date: Optional ISO-8601 date/datetime when the task is
-            planned. Omit to leave it unscheduled (it will still surface in
-            the pending queue as needing placement).
-        frequency_days: Optional positive integer. If set, the task recurs:
-            completing it automatically spawns the next pending occurrence
-            ``frequency_days`` later.
+        scheduled_date: Optional ISO-8601 date/datetime. Omit to leave the task
+            unscheduled (it still surfaces in the pending queue).
+        frequency_days: Optional positive integer. If set, completing the task
+            spawns the next occurrence ``frequency_days`` later.
     """
     with _session() as svc:
         try:
@@ -410,6 +418,8 @@ async def create_task(
                 TaskCreate(
                     tree_id=tree_id,
                     action_type=action_type,
+                    estimated_minutes=estimated_minutes,
+                    required_resources=required_resources,
                     priority_score=priority_score,
                     scheduled_date=_parse_dt(scheduled_date, field="scheduled_date"),
                     frequency_days=frequency_days,
@@ -421,25 +431,34 @@ async def create_task(
 
 
 @mcp.tool()
-async def create_baseline_tasks(tree_id: int, start_date: str | None = None) -> list[dict]:
-    """Generate the standard recurring care task set for a tree (typically a
-    newly planted one): a health inspection, fertilizing, mulching and a
-    structural prune, each with a sensible default priority and cadence.
+async def create_baseline_tasks(tree_id: int, tasks: list[dict]) -> list[dict]:
+    """Create a starter care-task set for a tree. YOU decide the tasks and MUST
+    fully specify each one - the JIT scheduler needs labor time and resources
+    up front.
 
     Args:
         tree_id: The tree to generate tasks for. Rejected if it does not exist.
-        start_date: Optional ISO-8601 date/datetime to anchor the first
-            occurrence of each task from (defaults to now). Each task's first
-            occurrence is scheduled one full cadence after this anchor.
+        tasks: A list of task specs. Each object MUST contain:
+            - ``action_type`` (str): free-text work type.
+            - ``estimated_minutes`` (int > 0): hands-on labor time.
+            - ``required_resources`` (list[str]): product/equipment names ([] if none).
+          and MAY contain:
+            - ``priority_score`` (number, default 0.0)
+            - ``frequency_days`` (int > 0): recurring cadence.
+            - ``scheduled_date`` (ISO string): first planned date.
+          Example: ``[{"action_type": "inspect_health", "estimated_minutes": 15,
+          "required_resources": [], "frequency_days": 30}]``
 
     Returns the list of created task objects.
     """
+    try:
+        items = [TaskBaselineItem.model_validate(item) for item in tasks]
+    except Exception as exc:  # noqa: BLE001 - malformed input -> clean tool error
+        raise ToolError(f"Invalid tasks payload: {exc}") from exc
+
     with _session() as svc:
         try:
-            created = await svc.tasks.create_baseline_tasks(
-                tree_id,
-                start_date=_parse_dt(start_date, field="start_date"),
-            )
+            created = await svc.tasks.create_baseline_tasks(tree_id, items)
         except DomainError as exc:
             raise ToolError(str(exc)) from exc
         return [t.model_dump(mode="json") for t in created]
@@ -449,7 +468,7 @@ async def create_baseline_tasks(tree_id: int, start_date: str | None = None) -> 
 async def batch_update_task_priorities(task_updates: list[dict]) -> list[dict]:
     """Update ``priority_score`` and/or ``scheduled_date`` across many tasks in
     a single atomic transaction - the Foreman agent's main write once it has
-    reasoned about the queue against the user's constraints.
+    reasoned about the queue against the stated time budget.
 
     Args:
         task_updates: A list of change objects. Each object MUST contain:
@@ -518,49 +537,47 @@ async def defer_task(task_id: int, until: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tools - user context (scheduling constraints)
+# Tools - knowledge base (Consensus Fusion RAG)
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_user_constraints() -> dict:
-    """Retrieve the scheduling constraints the Foreman agent must respect.
+async def search_ag_knowledge(tree_id: int, query: str) -> str:
+    """Search the agronomy knowledge base for passages relevant to ``query``,
+    restricted to the sources linked to ``tree_id``.
 
-    Returns an object with:
-        - ``available_labor_hours_per_day`` (number): person-hours of work
-          that can be scheduled on a normal day.
-        - ``available_products`` (list of strings): free-text names of
-          fertilizers, sprays, tools and equipment currently on hand. Tasks
-          needing a product not in this list should be deferred or flagged.
-        - ``id`` and ``updated_at``.
-
-    Defaults (8 hours/day, no products) are created on first read.
-    """
-    with _session() as svc:
-        return (await svc.users.get_constraints()).model_dump(mode="json")
-
-
-@mcp.tool()
-async def update_user_constraints(
-    available_labor_hours_per_day: float | None = None,
-    available_products: list[str] | None = None,
-) -> dict:
-    """Update the scheduling constraints. Only the arguments you pass change.
+    Consensus-fusion retrieval: each linked source is searched *independently*
+    in the vector store, and the results are returned grouped by source so the
+    agent can weigh agreement / disagreement between sources itself.
 
     Args:
-        available_labor_hours_per_day: New daily labor budget in person-hours.
-        available_products: New full list of product/equipment names on hand
-            (replaces the existing list).
+        tree_id: The tree whose linked sources define the allowed corpus.
+        query: A natural-language question, e.g. "when should I prune a young
+            mango" or "signs of nitrogen deficiency".
 
-    Returns the updated constraints object.
+    Returns a single string. Each linked source that had a hit contributes a
+    block:  ``--- SOURCE {id} ---`` followed by its matching chunks. Returns a
+    short notice if the tree has no linked sources or nothing matched.
     """
-    patch: dict[str, object] = {}
-    if available_labor_hours_per_day is not None:
-        patch["available_labor_hours_per_day"] = available_labor_hours_per_day
-    if available_products is not None:
-        patch["available_products"] = available_products
     with _session() as svc:
-        updated = await svc.users.update_constraints(UserContextUpdate(**patch))
-        return updated.model_dump(mode="json")
+        try:
+            allowed_source_ids = svc.sources.allowed_source_ids(tree_id)
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+
+    if not allowed_source_ids:
+        return f"No knowledge sources are linked to tree {tree_id}."
+
+    store = get_vector_store(get_settings())
+    blocks: list[str] = []
+    for source_id in allowed_source_ids:
+        chunks = store.search(query, source_id=source_id, n_results=4)
+        if chunks:
+            body = "\n".join(f"- {c.strip()}" for c in chunks)
+            blocks.append(f"--- SOURCE {source_id} ---\n{body}")
+
+    if not blocks:
+        return "No relevant passages found in the sources linked to this tree."
+    return "\n\n".join(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +597,7 @@ async def system_summary() -> str:
             tree_rows = await svc.trees.list_trees()
             all_tasks = await svc.tasks.list_tasks()
             pending = await svc.tasks.get_pending_queue()
+            source_rows = await svc.sources.list_sources()
     except Exception as exc:  # noqa: BLE001 - resources surface errors this way
         raise ResourceError(f"Could not read orchard stats: {exc}") from exc
 
@@ -596,6 +614,7 @@ async def system_summary() -> str:
         f"Unassigned trees: {unassigned}",
         f"Tasks (total):    {len(all_tasks)}",
         f"Tasks (pending):  {len(pending)}",
+        f"KB sources:       {len(source_rows)}",
         "Status:           online",
     ]
     if species_tally:

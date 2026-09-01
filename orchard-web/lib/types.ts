@@ -47,6 +47,20 @@ export interface TreeInput {
 
 export type TreePatch = Partial<TreeInput>;
 
+export type SourceType = "file" | "text";
+
+export interface Source {
+  id: number;
+  name: string;
+  source_type: SourceType;
+  file_path: string | null;
+  upload_date: string;
+}
+
+export interface SourceDetail extends Source {
+  raw_content: string;
+}
+
 /** Shape of a 4xx body returned by the FastAPI error handlers. */
 export interface ApiErrorBody {
   detail: string;

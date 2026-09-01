@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, status
 
-from ...dependencies import get_tree_service
+from ...dependencies import get_source_service, get_tree_service
+from ...schemas.source import SourceRead, TreeSourcesUpdate
 from ...schemas.tree import TreeCreate, TreeRead, TreeUpdate
+from ...services.source_service import SourceService
 from ...services.tree_service import TreeService
 
 router = APIRouter(prefix="/trees", tags=["trees"])
@@ -45,3 +47,21 @@ async def update_tree(
 )
 async def delete_tree(tree_id: int, service: TreeService = Depends(get_tree_service)):
     await service.delete_tree(tree_id)
+
+
+# -- linked knowledge-base sources ---------------------------------
+
+@router.get("/{tree_id}/sources", response_model=list[SourceRead])
+async def list_tree_sources(
+    tree_id: int, sources: SourceService = Depends(get_source_service)
+):
+    return await sources.sources_for_tree(tree_id)
+
+
+@router.put("/{tree_id}/sources", response_model=list[SourceRead])
+async def set_tree_sources(
+    tree_id: int,
+    payload: TreeSourcesUpdate,
+    sources: SourceService = Depends(get_source_service),
+):
+    return await sources.set_tree_sources(tree_id, payload.source_ids)

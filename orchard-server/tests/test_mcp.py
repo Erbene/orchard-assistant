@@ -29,10 +29,10 @@ EXPECTED_TOOLS = {
     "delete_tree",
     "get_pending_tasks",
     "create_task",
+    "create_baseline_tasks",
     "batch_update_task_priorities",
     "mark_task_complete",
-    "get_user_constraints",
-    "update_user_constraints",
+    "search_ag_knowledge",
 }
 
 
@@ -58,7 +58,11 @@ async def _exercise(db_path: str) -> None:
         command=sys.executable,
         args=["-m", "app.mcp_server"],
         cwd=str(SERVER_ROOT),
-        env={"ORCHARD_DB_PATH": db_path, "PYTHONPATH": str(SERVER_ROOT)},
+        env={
+            "ORCHARD_DB_PATH": db_path,
+            "ORCHARD_CHROMA_PATH": str(Path(db_path).with_name("chroma")),
+            "PYTHONPATH": str(SERVER_ROOT),
+        },
     )
 
     async with stdio_client(params) as (read, write):
@@ -87,24 +91,26 @@ async def _exercise(db_path: str) -> None:
             assert _payload(listed)[0]["variety"] == "Kent"
             tree_id = _payload(created)["tree_id"]
 
-            # --- Foreman task tools -----------------------------------
-            t1 = _payload(await session.call_tool(
-                "create_task", {"tree_id": tree_id, "action_type": "prune", "priority_score": 3.0}
-            ))
-            t2 = _payload(await session.call_tool(
-                "create_task", {"tree_id": tree_id, "action_type": "fertilize", "priority_score": 8.0}
-            ))
+            # --- Foreman task tools (JIT: minutes + resources required) -----
+            t1 = _payload(await session.call_tool("create_task", {
+                "tree_id": tree_id, "action_type": "prune", "priority_score": 3.0,
+                "estimated_minutes": 30, "required_resources": ["pruning saw"],
+            }))
+            t2 = _payload(await session.call_tool("create_task", {
+                "tree_id": tree_id, "action_type": "fertilize", "priority_score": 8.0,
+                "estimated_minutes": 20, "required_resources": [],
+            }))
+            assert t1["required_resources"] == ["pruning saw"]
 
             queue = _payload(await session.call_tool("get_pending_tasks", {}))
             assert [t["action_type"] for t in queue] == ["fertilize", "prune"]
 
-            batched = await session.call_tool(
-                "batch_update_task_priorities",
-                {"task_updates": [
+            batched = await session.call_tool("batch_update_task_priorities", {
+                "task_updates": [
                     {"task_id": t1["id"], "priority_score": 10.0, "scheduled_date": "2026-09-15"},
                     {"task_id": t2["id"], "priority_score": 1.0},
-                ]},
-            )
+                ],
+            })
             assert not batched.isError, batched.content
             requeued = _payload(await session.call_tool("get_pending_tasks", {}))
             assert [t["action_type"] for t in requeued] == ["prune", "fertilize"]
@@ -112,18 +118,19 @@ async def _exercise(db_path: str) -> None:
             done = await session.call_tool("mark_task_complete", {"task_id": t1["id"]})
             assert _payload(done)["status"] == "completed"
 
-            constraints = _payload(await session.call_tool("get_user_constraints", {}))
-            assert constraints["available_labor_hours_per_day"] == 8.0
-            updated_c = _payload(await session.call_tool(
-                "update_user_constraints", {"available_products": ["urea", "neem oil"]}
-            ))
-            assert updated_c["available_products"] == ["urea", "neem oil"]
+            # --- RAG fusion tool: no sources linked -> graceful notice -----
+            rag = await session.call_tool(
+                "search_ag_knowledge", {"tree_id": tree_id, "query": "pruning"}
+            )
+            assert not rag.isError
+            assert "No knowledge sources" in _payload(rag)
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text
             assert "Zones:            1" in body
             assert "Trees:            1" in body
             assert "Tasks (total):    2" in body
+            assert "KB sources:       0" in body
             assert "mango: 1" in body
 
             missing = await session.call_tool(

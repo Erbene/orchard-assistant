@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bot,
+  Library,
   Trees,
   MapPin,
   Menu,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/assistant", label: "Assistant", icon: Bot },
   { href: "/trees", label: "Trees", icon: Trees },
   { href: "/zones", label: "Zones", icon: MapPin },
+  { href: "/sources", label: "Sources", icon: Library },
 ] as const;
 
 const STORAGE_KEY = "orchard.sidebar.collapsed";

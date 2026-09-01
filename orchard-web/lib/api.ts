@@ -5,7 +5,17 @@
  * rewrites them to `${FASTAPI_URL}/api/v1/...`. Non-2xx responses throw
  * {@link ApiError} so form handlers can read `.status` / `.detail` / `.field`.
  */
-import type { ApiErrorBody, Tree, TreeInput, TreePatch, Zone, ZoneInput, ZonePatch } from "./types";
+import type {
+  ApiErrorBody,
+  Source,
+  SourceDetail,
+  Tree,
+  TreeInput,
+  TreePatch,
+  Zone,
+  ZoneInput,
+  ZonePatch,
+} from "./types";
 
 export const API_PREFIX = "/api/v1";
 
@@ -85,6 +95,29 @@ async function request<T>(
   return parsed as T;
 }
 
+/** multipart/form-data POST (the browser sets the boundary header). */
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(path, { method: "POST", body: form });
+  } catch (cause) {
+    throw new ApiError(0, "Network error - the backend is unreachable.", undefined, cause);
+  }
+  const parsed = (await res.json().catch(() => undefined)) as
+    | (T & Partial<ApiErrorBody>)
+    | undefined;
+  if (!res.ok) {
+    const err = parsed as ApiErrorBody | undefined;
+    throw new ApiError(
+      res.status,
+      err?.detail ?? `Request failed (${res.status})`,
+      err?.field,
+      parsed,
+    );
+  }
+  return parsed as T;
+}
+
 export const apiClient = {
   get: <T>(path: string, opts?: RequestOptions) => request<T>("GET", path, undefined, opts),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
@@ -95,6 +128,7 @@ export const apiClient = {
     request<T>("PATCH", path, body, opts),
   del: <T = void>(path: string, opts?: RequestOptions) =>
     request<T>("DELETE", path, undefined, opts),
+  postForm: <T>(path: string, form: FormData) => requestForm<T>(path, form),
 };
 
 // --------------------------------------------------------------------------
@@ -118,4 +152,30 @@ export const treesApi = {
   update: (id: number, patch: TreePatch) =>
     apiClient.patch<Tree>(`${API_PREFIX}/trees/${id}`, patch),
   remove: (id: number) => apiClient.del(`${API_PREFIX}/trees/${id}`),
+  linkedSources: (id: number) =>
+    apiClient.get<Source[]>(`${API_PREFIX}/trees/${id}/sources`),
+  setLinkedSources: (id: number, sourceIds: number[]) =>
+    apiClient.put<Source[]>(`${API_PREFIX}/trees/${id}/sources`, {
+      source_ids: sourceIds,
+    }),
+};
+
+export const sourcesApi = {
+  list: () => apiClient.get<Source[]>(`${API_PREFIX}/sources`),
+  get: (id: number) => apiClient.get<SourceDetail>(`${API_PREFIX}/sources/${id}`),
+  remove: (id: number) => apiClient.del(`${API_PREFIX}/sources/${id}`),
+  rename: (id: number, name: string) =>
+    apiClient.patch<Source>(`${API_PREFIX}/sources/${id}`, { name }),
+  ingestText: (name: string, text: string) => {
+    const form = new FormData();
+    form.set("name", name);
+    form.set("text", text);
+    return apiClient.postForm<Source>(`${API_PREFIX}/sources`, form);
+  },
+  ingestFile: (name: string, file: File) => {
+    const form = new FormData();
+    form.set("name", name);
+    form.set("file", file);
+    return apiClient.postForm<Source>(`${API_PREFIX}/sources`, form);
+  },
 };

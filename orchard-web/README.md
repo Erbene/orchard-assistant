@@ -1,13 +1,14 @@
 # Orchard Web
 
 Next.js (App Router) frontend for the Orchard Management System. A persistent
-collapsible sidebar with three routes:
+collapsible sidebar:
 
 | Route | Page |
 | ----- | ---- |
 | `/assistant` (and `/`) | Full-page ChatGPT-style assistant. Streams SSE from the backend; the model is a stub. |
-| `/trees` | Trees CRUD data table (`@tanstack/react-table`) — search, sort, paginate, row actions, modal form. |
+| `/trees` | Trees CRUD data table (`@tanstack/react-table`) — search, sort, paginate, row actions, modal form. The edit dialog has a **Linked Sources** multi-select. |
 | `/zones` | Zones CRUD data table — same shape. |
+| `/sources` | Knowledge-base sources: CRUD table + modal to upload a file or paste text. |
 
 `species`, `variety`, `soil_drainage` and zone `water_source` are free-text
 inputs, stored exactly as typed by [orchard-server](../orchard-server) (no
@@ -22,17 +23,26 @@ app/
   assistant/page.tsx  header (status) · centered max-w-3xl message list · fixed composer
   trees/page.tsx      header · <DataTable/> · create/edit <Dialog> · <DetailsDialog> · <ConfirmDialog>
   zones/page.tsx      same
-  api/chat/route.ts   SSE forward to ${FASTAPI_URL}/api/v1/chat  (only route handler)
+  sources/page.tsx    same shape (upload/paste modal, rename, view raw_content)
+  api/chat/route.ts        SSE forward to ${FASTAPI_URL}/api/v1/chat
+  api/v1/sources/route.ts  GET + multipart POST proxy — the rewrite drops FormData bodies
 
 components/
-  sidebar.tsx              persistent rail (localStorage collapse) + mobile <Sheet> drawer; active link via usePathname()
-  ui/data-table.tsx        reusable TanStack table: global search, sortable headers, pagination, loading/empty
+  sidebar.tsx              persistent rail (localStorage collapse) + mobile <Sheet> drawer
+  ui/data-table.tsx        reusable TanStack table: global search, sortable headers, pagination
   ui/{dialog,sheet,dropdown-menu,table,confirm-dialog,details-dialog}.tsx
-  data-table/{row-actions,cells}.tsx   "…" menu (View/Edit/Delete) + shared cell renderers
-  trees/columns.tsx · zones/columns.tsx   ColumnDef factories
+  data-table/{row-actions,cells}.tsx      "…" menu (View/Edit/Delete) + shared cell renderers
+  {trees,zones,sources}/columns.tsx       ColumnDef factories
   forms/{tree,zone}-entity-form.tsx       reused inside the create/edit Dialog
-  chat/{chat-message,tool-call-widget,approval-card}.tsx   rendered in the assistant message list
+  sources/source-upload-form.tsx          file / paste-text toggle → multipart POST
+  trees/linked-sources.tsx                multi-select: GET + PUT /api/v1/trees/{id}/sources
+  chat/{chat-message,tool-call-widget,approval-card}.tsx
 ```
+
+> **Multipart caveat.** Next's `rewrites()` proxy drops `multipart/form-data`
+> request bodies, so `POST /api/v1/sources` goes through a real route handler
+> (`app/api/v1/sources/route.ts`) that re-serializes the FormData. Everything
+> else still flows through the rewrite.
 
 ## Backend communication
 

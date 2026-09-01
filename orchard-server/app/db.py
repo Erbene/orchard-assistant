@@ -21,11 +21,30 @@ def connect(settings: Settings) -> sqlite3.Connection:
     return conn
 
 
+# Columns added to an existing table after its first release. SQLite has no
+# "ADD COLUMN IF NOT EXISTS", so init_db backfills them idempotently.
+_ADDED_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "task": (
+        ("estimated_minutes", "INTEGER"),
+        ("required_resources", "TEXT NOT NULL DEFAULT '[]'"),
+    ),
+}
+
+
 def init_db(settings: Settings) -> None:
     ddl = Path(settings.schema_path).read_text(encoding="utf-8")
     conn = connect(settings)
     try:
         conn.executescript(ddl)
+        _backfill_columns(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _backfill_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")

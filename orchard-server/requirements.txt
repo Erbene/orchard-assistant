@@ -1,5 +1,16 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+python-multipart==0.0.32
 httpx==0.28.1
 mcp>=1.29,<2
+
+# RAG knowledge base
+chromadb>=1.5,<2
+pypdf>=5
+
+# Agent orchestration skeleton (app/agent)
+langgraph>=1.2,<2
+langchain-core>=1.0,<2
+langchain-mcp-adapters>=0.3,<1
+
 pytest==8.3.4

@@ -1,5 +1,13 @@
 from .chat import ChatMessageIn, ChatRequest
+from .source import (
+    SourceCreate,
+    SourceDetail,
+    SourceRead,
+    SourceType,
+    TreeSourcesUpdate,
+)
 from .task import (
+    TaskBaselineItem,
     TaskCreate,
     TaskPriorityUpdate,
     TaskRead,
@@ -7,12 +15,17 @@ from .task import (
     TaskUpdate,
 )
 from .tree import TreeCreate, TreeRead, TreeUpdate
-from .user_context import UserContextRead, UserContextUpdate
 from .zone import ZoneCreate, ZoneRead, ZoneUpdate
 
 __all__ = [
     "ChatMessageIn",
     "ChatRequest",
+    "SourceCreate",
+    "SourceDetail",
+    "SourceRead",
+    "SourceType",
+    "TreeSourcesUpdate",
+    "TaskBaselineItem",
     "TaskCreate",
     "TaskPriorityUpdate",
     "TaskRead",
@@ -21,8 +34,6 @@ __all__ = [
     "TreeCreate",
     "TreeRead",
     "TreeUpdate",
-    "UserContextRead",
-    "UserContextUpdate",
     "ZoneCreate",
     "ZoneRead",
     "ZoneUpdate",

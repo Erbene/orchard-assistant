@@ -28,14 +28,15 @@ from fastapi import Depends
 
 from .config import Settings, get_settings
 from .db import connect, init_db
+from .rag.vector_store import OrchardVectorStore, get_vector_store
+from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
-from .repositories.user_repository import UserRepository
 from .repositories.zone_repository import ZoneRepository
 from .services.chat_service import ChatService
+from .services.source_service import SourceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
-from .services.user_service import UserService
 from .services.validators import ValidationAgent, get_default_validation_agent
 from .services.zone_service import ZoneService
 
@@ -82,8 +83,16 @@ def get_task_repository(conn=Depends(get_connection)) -> TaskRepository:
     return TaskRepository(conn)
 
 
-def get_user_repository(conn=Depends(get_connection)) -> UserRepository:
-    return UserRepository(conn)
+def get_source_repository(conn=Depends(get_connection)) -> SourceRepository:
+    return SourceRepository(conn)
+
+
+# -- vector store (process singleton) -------------------------------
+
+def get_vector_store_dep(
+    settings: Settings = Depends(get_settings_dep),
+) -> OrchardVectorStore:
+    return get_vector_store(settings)
 
 
 # -- validation agent -------------------------------------------------
@@ -116,10 +125,13 @@ def get_task_service(
     return TaskService(tasks, trees)
 
 
-def get_user_service(
-    users: UserRepository = Depends(get_user_repository),
-) -> UserService:
-    return UserService(users)
+def get_source_service(
+    sources: SourceRepository = Depends(get_source_repository),
+    trees: TreeRepository = Depends(get_tree_repository),
+    store: OrchardVectorStore = Depends(get_vector_store_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> SourceService:
+    return SourceService(sources, trees, store, settings)
 
 
 def get_chat_service() -> ChatService:

@@ -1,8 +1,8 @@
 """Task business logic: state transitions, recurring-task spawning, batch
-priority updates, and baseline task generation.
+priority updates, and (LLM-driven) baseline task generation.
 
-HTTP-agnostic. Every method returns pure Pydantic models (``TaskRead`` /
-``list[TaskRead]``) and raises framework-neutral ``DomainError`` subclasses.
+HTTP-agnostic. Every method returns pure Pydantic models and raises
+framework-neutral ``DomainError`` subclasses.
 """
 from __future__ import annotations
 
@@ -12,21 +12,13 @@ from datetime import datetime, timedelta, timezone
 from ..repositories.task_repository import TaskRepository
 from ..repositories.tree_repository import TreeRepository
 from ..schemas.task import (
+    TaskBaselineItem,
     TaskCreate,
     TaskPriorityUpdate,
     TaskRead,
     TaskUpdate,
 )
 from .exceptions import DomainValidationError, NotFoundError
-
-# Standard starter task set for a newly planted tree. First occurrence is
-# scheduled ``frequency_days`` out; the Foreman agent redistributes from there.
-_BASELINE_TASKS: tuple[dict[str, float | str | int], ...] = (
-    {"action_type": "inspect_health", "priority_score": 5.0, "frequency_days": 30},
-    {"action_type": "fertilize", "priority_score": 6.0, "frequency_days": 90},
-    {"action_type": "mulch", "priority_score": 3.0, "frequency_days": 180},
-    {"action_type": "structural_prune", "priority_score": 4.0, "frequency_days": 365},
-)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -47,8 +39,10 @@ class TaskService:
     async def list_tasks(
         self, *, status: str | None = None, tree_id: int | None = None
     ) -> list[TaskRead]:
-        rows = self._tasks.list(status=status, tree_id=tree_id)
-        return [TaskRead.model_validate(r) for r in rows]
+        return [
+            TaskRead.model_validate(r)
+            for r in self._tasks.list(status=status, tree_id=tree_id)
+        ]
 
     async def get_task(self, task_id: int) -> TaskRead:
         row = self._tasks.get(task_id)
@@ -59,7 +53,6 @@ class TaskService:
     async def get_pending_queue(
         self, *, scheduled_before: datetime | None = None
     ) -> list[TaskRead]:
-        """Pending tasks, highest priority first (see ``TaskRepository.list_pending``)."""
         rows = self._tasks.list_pending(scheduled_before=_iso(scheduled_before))
         return [TaskRead.model_validate(r) for r in rows]
 
@@ -75,6 +68,8 @@ class TaskService:
                 "priority_score": payload.priority_score,
                 "scheduled_date": _iso(payload.scheduled_date),
                 "frequency_days": payload.frequency_days,
+                "estimated_minutes": payload.estimated_minutes,
+                "required_resources": payload.required_resources,
             }
         )
         return TaskRead.model_validate(row)
@@ -87,10 +82,9 @@ class TaskService:
         patch = payload.model_dump(exclude_unset=True)
         if "scheduled_date" in patch:
             patch["scheduled_date"] = _iso(payload.scheduled_date)
-        if "action_type" in patch and patch["action_type"] is not None:
+        if patch.get("action_type"):
             patch["action_type"] = patch["action_type"].strip()
 
-        # keep completed_at consistent with any status change
         if "status" in patch:
             was_completed = current["status"] == "completed"
             now_completed = patch["status"] == "completed"
@@ -131,6 +125,8 @@ class TaskService:
                         anchor + timedelta(days=completed.frequency_days)
                     ),
                     "frequency_days": completed.frequency_days,
+                    "estimated_minutes": completed.estimated_minutes,
+                    "required_resources": completed.required_resources,
                 }
             )
         return completed
@@ -138,14 +134,12 @@ class TaskService:
     async def defer_task(
         self, task_id: int, *, until: datetime | None = None
     ) -> TaskRead:
-        current = self._tasks.get(task_id)
-        if current is None:
+        if self._tasks.get(task_id) is None:
             raise NotFoundError(f"task {task_id} not found")
         patch: dict[str, object] = {"status": "deferred"}
         if until is not None:
             patch["scheduled_date"] = _iso(until)
-        row = self._tasks.update(task_id, patch)
-        return TaskRead.model_validate(row)
+        return TaskRead.model_validate(self._tasks.update(task_id, patch))
 
     async def batch_update_priorities(
         self, updates: Sequence[TaskPriorityUpdate]
@@ -160,7 +154,6 @@ class TaskService:
                 patch["priority_score"] = change.priority_score
             if change.scheduled_date is not None:
                 patch["scheduled_date"] = _iso(change.scheduled_date)
-
             row = (
                 self._tasks.update(change.task_id, patch)
                 if patch
@@ -172,22 +165,29 @@ class TaskService:
         return results
 
     async def create_baseline_tasks(
-        self, tree_id: int, *, start_date: datetime | None = None
+        self, tree_id: int, items: Sequence[TaskBaselineItem]
     ) -> list[TaskRead]:
-        """Create the standard recurring care tasks for a (newly planted) tree."""
+        """Create a starter task set for a tree from LLM-specified items.
+
+        Each item must carry ``estimated_minutes`` and ``required_resources`` -
+        the JIT scheduler needs them from the start.
+        """
         self._require_tree(tree_id)
-        start = start_date or datetime.now(timezone.utc)
+        if not items:
+            raise DomainValidationError("items", "at least one baseline task is required")
+
         created: list[TaskRead] = []
-        for template in _BASELINE_TASKS:
-            frequency = int(template["frequency_days"])
+        for item in items:
             row = self._tasks.create(
                 {
                     "tree_id": tree_id,
-                    "action_type": str(template["action_type"]),
+                    "action_type": item.action_type.strip(),
                     "status": "pending",
-                    "priority_score": float(template["priority_score"]),
-                    "scheduled_date": _iso(start + timedelta(days=frequency)),
-                    "frequency_days": frequency,
+                    "priority_score": item.priority_score,
+                    "scheduled_date": _iso(item.scheduled_date),
+                    "frequency_days": item.frequency_days,
+                    "estimated_minutes": item.estimated_minutes,
+                    "required_resources": item.required_resources,
                 }
             )
             created.append(TaskRead.model_validate(row))

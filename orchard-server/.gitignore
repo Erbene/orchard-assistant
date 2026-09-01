@@ -4,3 +4,6 @@ __pycache__/
 orchard.db
 *.db
 .pytest_cache/
+.env
+chroma/
+uploads/

@@ -1,9 +1,9 @@
-"""Task transport models.
+"""Task transport models (JIT scheduling model).
 
 A ``Task`` is a unit of orchard work linked to one ``Tree``. ``action_type``
-is free text (no controlled vocabulary, consistent with the rest of the
-domain); ``status`` is a genuine state-machine field constrained to
-``pending`` / ``completed`` / ``deferred``.
+is free text; ``status`` is a state-machine field constrained to
+``pending`` / ``completed`` / ``deferred``. ``estimated_minutes`` and
+``required_resources`` feed the Just-In-Time scheduling fit.
 """
 from __future__ import annotations
 
@@ -18,20 +18,25 @@ TaskStatus = Literal["pending", "completed", "deferred"]
 class TaskBase(BaseModel):
     action_type: str = Field(
         min_length=1,
-        description="Free-text work type, e.g. 'prune', 'fertilize', 'irrigate', 'scout_pests'.",
+        description="Free-text work type, e.g. 'prune', 'fertilize', 'irrigate'.",
     )
     priority_score: float = Field(
-        default=0.0,
-        description="Relative urgency; higher sorts first in the queue.",
+        default=0.0, description="Relative urgency; higher sorts first in the queue."
     )
     scheduled_date: datetime | None = Field(
-        default=None,
-        description="When the task is planned. NULL means unscheduled / needs placing.",
+        default=None, description="When the task is planned. NULL = needs placing."
     )
     frequency_days: int | None = Field(
+        default=None, gt=0, description="If set, the task recurs every N days."
+    )
+    estimated_minutes: int | None = Field(
         default=None,
         gt=0,
-        description="If set, the task recurs every N days (a new pending task is spawned on completion).",
+        description="Estimated hands-on labor time in minutes (used for JIT fit).",
+    )
+    required_resources: list[str] = Field(
+        default_factory=list,
+        description="Free-text names of products/equipment the task needs.",
     )
 
 
@@ -50,6 +55,8 @@ class TaskUpdate(BaseModel):
     priority_score: float | None = None
     scheduled_date: datetime | None = None
     frequency_days: int | None = Field(default=None, gt=0)
+    estimated_minutes: int | None = Field(default=None, gt=0)
+    required_resources: list[str] | None = None
 
 
 class TaskPriorityUpdate(BaseModel):
@@ -64,6 +71,20 @@ class TaskPriorityUpdate(BaseModel):
     scheduled_date: datetime | None = Field(
         default=None, description="New scheduled datetime, or omit to leave unchanged."
     )
+
+
+class TaskBaselineItem(BaseModel):
+    """One baseline task the LLM must fully specify (minutes + resources are
+    REQUIRED here - the JIT model needs them up front)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_type: str = Field(min_length=1)
+    estimated_minutes: int = Field(gt=0)
+    required_resources: list[str] = Field(default_factory=list)
+    priority_score: float = 0.0
+    frequency_days: int | None = Field(default=None, gt=0)
+    scheduled_date: datetime | None = None
 
 
 class TaskRead(TaskBase):
