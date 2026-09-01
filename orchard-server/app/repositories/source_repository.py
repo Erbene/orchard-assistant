@@ -1,32 +1,38 @@
 """Raw persistence for ``sources`` and the ``tree_sources`` mapping table."""
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 Row = dict[str, Any]
 
 
 class SourceRepository:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
     # -- sources ----------------------------------------------------
 
-    def get(self, source_id: int) -> Row | None:
-        cur = self._conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,))
-        row = cur.fetchone()
+    async def get(self, source_id: int) -> Row | None:
+        result = await self._conn.execute(
+            text("SELECT * FROM sources WHERE id = :id"), {"id": source_id}
+        )
+        row = result.mappings().first()
         return dict(row) if row is not None else None
 
-    def list(self) -> list[Row]:
-        cur = self._conn.execute("SELECT * FROM sources ORDER BY id DESC")
-        return [dict(r) for r in cur.fetchall()]
+    async def list(self) -> list[Row]:
+        result = await self._conn.execute(text("SELECT * FROM sources ORDER BY id DESC"))
+        return [dict(r) for r in result.mappings().all()]
 
-    def exists(self, source_id: int) -> bool:
-        cur = self._conn.execute("SELECT 1 FROM sources WHERE id = ?", (source_id,))
-        return cur.fetchone() is not None
+    async def exists(self, source_id: int) -> bool:
+        result = await self._conn.execute(
+            text("SELECT 1 FROM sources WHERE id = :id"), {"id": source_id}
+        )
+        return result.first() is not None
 
-    def create(
+    async def create(
         self,
         *,
         name: str,
@@ -34,51 +40,72 @@ class SourceRepository:
         raw_content: str,
         file_path: str | None = None,
     ) -> Row:
-        cur = self._conn.execute(
-            "INSERT INTO sources (name, source_type, file_path, raw_content)"
-            " VALUES (?, ?, ?, ?)",
-            (name, source_type, file_path, raw_content),
+        result = await self._conn.execute(
+            text(
+                "INSERT INTO sources (name, source_type, file_path, raw_content)"
+                " VALUES (:name, :source_type, :file_path, :raw_content) RETURNING *"
+            ),
+            {
+                "name": name,
+                "source_type": source_type,
+                "file_path": file_path,
+                "raw_content": raw_content,
+            },
         )
-        row = self.get(int(cur.lastrowid))
-        assert row is not None
-        return row
+        return dict(result.mappings().one())
 
-    def set_file_path(self, source_id: int, file_path: str) -> None:
-        self._conn.execute(
-            "UPDATE sources SET file_path = ? WHERE id = ?", (file_path, source_id)
+    async def set_file_path(self, source_id: int, file_path: str) -> None:
+        await self._conn.execute(
+            text("UPDATE sources SET file_path = :file_path WHERE id = :id"),
+            {"file_path": file_path, "id": source_id},
         )
 
-    def rename(self, source_id: int, name: str) -> Row | None:
-        self._conn.execute(
-            "UPDATE sources SET name = ? WHERE id = ?", (name, source_id)
+    async def rename(self, source_id: int, name: str) -> Row | None:
+        await self._conn.execute(
+            text("UPDATE sources SET name = :name WHERE id = :id"),
+            {"name": name, "id": source_id},
         )
-        return self.get(source_id)
+        return await self.get(source_id)
 
-    def delete(self, source_id: int) -> bool:
-        cur = self._conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
-        return cur.rowcount > 0
+    async def delete(self, source_id: int) -> bool:
+        result = await self._conn.execute(
+            text("DELETE FROM sources WHERE id = :id"), {"id": source_id}
+        )
+        return result.rowcount > 0
 
     # -- tree <-> source links -----------------------------------
 
-    def source_ids_for_tree(self, tree_id: int) -> list[int]:
-        cur = self._conn.execute(
-            "SELECT source_id FROM tree_sources WHERE tree_id = ? ORDER BY source_id",
-            (tree_id,),
+    async def source_ids_for_tree(self, tree_id: int) -> list[int]:
+        result = await self._conn.execute(
+            text(
+                "SELECT source_id FROM tree_sources WHERE tree_id = :tree_id"
+                " ORDER BY source_id"
+            ),
+            {"tree_id": tree_id},
         )
-        return [r[0] for r in cur.fetchall()]
+        return [r[0] for r in result.all()]
 
-    def sources_for_tree(self, tree_id: int) -> list[Row]:
-        cur = self._conn.execute(
-            "SELECT s.* FROM sources s"
-            " JOIN tree_sources ts ON ts.source_id = s.id"
-            " WHERE ts.tree_id = ? ORDER BY s.id DESC",
-            (tree_id,),
+    async def sources_for_tree(self, tree_id: int) -> list[Row]:
+        result = await self._conn.execute(
+            text(
+                "SELECT s.* FROM sources s"
+                " JOIN tree_sources ts ON ts.source_id = s.id"
+                " WHERE ts.tree_id = :tree_id ORDER BY s.id DESC"
+            ),
+            {"tree_id": tree_id},
         )
-        return [dict(r) for r in cur.fetchall()]
+        return [dict(r) for r in result.mappings().all()]
 
-    def set_tree_links(self, tree_id: int, source_ids: list[int]) -> None:
-        self._conn.execute("DELETE FROM tree_sources WHERE tree_id = ?", (tree_id,))
-        self._conn.executemany(
-            "INSERT INTO tree_sources (tree_id, source_id) VALUES (?, ?)",
-            [(tree_id, sid) for sid in dict.fromkeys(source_ids)],
+    async def set_tree_links(self, tree_id: int, source_ids: list[int]) -> None:
+        await self._conn.execute(
+            text("DELETE FROM tree_sources WHERE tree_id = :tree_id"), {"tree_id": tree_id}
         )
+        unique_ids = list(dict.fromkeys(source_ids))
+        if unique_ids:
+            await self._conn.execute(
+                text(
+                    "INSERT INTO tree_sources (tree_id, source_id)"
+                    " VALUES (:tree_id, :source_id)"
+                ),
+                [{"tree_id": tree_id, "source_id": sid} for sid in unique_ids],
+            )

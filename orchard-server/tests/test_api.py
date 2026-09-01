@@ -1,5 +1,7 @@
 """End-to-end tests through the HTTP layer, exercising router -> service ->
-repository against a throwaway SQLite file selected via dependency override."""
+repository against the disposable ``orchard_test`` Postgres database
+(selected via a dependency override; tables are truncated between tests by
+the autouse fixture in conftest.py)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,22 +9,21 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import Settings
-from app.dependencies import _initialized, get_settings_dep
+from app.dependencies import get_settings_dep
 from app.main import app
+
+from conftest import stack_settings
 
 API = "/api/v1"
 
 
 @pytest.fixture()
 def client(tmp_path: Path):
-    settings = Settings(db_path=str(tmp_path / "test.db"))
+    settings = stack_settings(uploads_dir=str(tmp_path))
     app.dependency_overrides[get_settings_dep] = lambda: settings
-    _initialized.discard(settings.db_path)
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
-    _initialized.discard(settings.db_path)
 
 
 def test_health(client):

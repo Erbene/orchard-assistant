@@ -6,7 +6,7 @@ what lets a future MCP tool call ``ZoneService.create_zone(...)`` directly.
 """
 from __future__ import annotations
 
-import sqlite3
+from sqlalchemy.exc import IntegrityError
 
 from ..repositories.zone_repository import ZoneRepository
 from ..schemas.zone import ZoneCreate, ZoneRead, ZoneUpdate
@@ -20,10 +20,10 @@ class ZoneService:
         self._validator = validator
 
     async def list_zones(self) -> list[ZoneRead]:
-        return [ZoneRead.model_validate(r) for r in self._repo.list()]
+        return [ZoneRead.model_validate(r) for r in await self._repo.list()]
 
     async def get_zone(self, zone_id: int) -> ZoneRead:
-        row = self._repo.get(zone_id)
+        row = await self._repo.get(zone_id)
         if row is None:
             raise NotFoundError(f"zone {zone_id} not found")
         return ZoneRead.model_validate(row)
@@ -31,11 +31,11 @@ class ZoneService:
     async def create_zone(self, payload: ZoneCreate) -> ZoneRead:
         soil = await self._normalize("soil_drainage", payload.soil_drainage)
         water_source = await self._normalize("water_source", payload.water_source)
-        row = self._repo.create(payload.name.strip(), soil, water_source)
+        row = await self._repo.create(payload.name.strip(), soil, water_source)
         return ZoneRead.model_validate(row)
 
     async def update_zone(self, zone_id: int, payload: ZoneUpdate) -> ZoneRead:
-        if self._repo.get(zone_id) is None:
+        if await self._repo.get(zone_id) is None:
             raise NotFoundError(f"zone {zone_id} not found")
 
         patch = payload.model_dump(exclude_unset=True)
@@ -45,15 +45,15 @@ class ZoneService:
         if "name" in patch and patch["name"] is not None:
             patch["name"] = patch["name"].strip()
 
-        row = self._repo.update(zone_id, patch)
+        row = await self._repo.update(zone_id, patch)
         return ZoneRead.model_validate(row)
 
     async def delete_zone(self, zone_id: int) -> None:
-        if self._repo.get(zone_id) is None:
+        if await self._repo.get(zone_id) is None:
             raise NotFoundError(f"zone {zone_id} not found")
         try:
-            self._repo.delete(zone_id)
-        except sqlite3.IntegrityError as exc:
+            await self._repo.delete(zone_id)
+        except IntegrityError as exc:
             raise ConflictError(
                 f"zone {zone_id} is still referenced by one or more trees"
             ) from exc

@@ -15,9 +15,9 @@ from fastapi import FastAPI
 from .api import api_router
 from .api.errors import register_exception_handlers
 from .config import get_settings
+from .core import db
 from .core.logging import configure_logging, get_logger
 from .core.middleware import RequestContextMiddleware
-from .dependencies import _ensure_schema
 from .mcp_server import mcp
 
 
@@ -26,8 +26,8 @@ async def lifespan(app: FastAPI):
     configure_logging(get_settings())          # dual-mode structlog pipeline
     log = get_logger("app")
     log.info("app.startup", version=app.version)
-    _ensure_schema(get_settings())
     yield
+    await db.dispose_all()
     log.info("app.shutdown")
 
 

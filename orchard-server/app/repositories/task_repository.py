@@ -1,14 +1,21 @@
 """Raw persistence for the ``task`` table.
 
 Repositories deal only in primitives and ``dict`` rows - no Pydantic, no
-business rules. ``required_resources`` is stored as JSON text and returned
-already decoded to ``list[str]``.
+business rules. ``required_resources`` is a ``jsonb`` column; a bare
+``text()`` query carries no SQLAlchemy column typing, so it's written with an
+explicit ``CAST(... AS jsonb)`` over a JSON-text bind param, and read back
+tolerantly (asyncpg may hand back either the raw JSON text or an
+already-decoded ``list`` depending on driver-level codecs - accept both
+rather than assume one).
 """
 from __future__ import annotations
 
 import json
-import sqlite3
+from datetime import date
 from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 Row = dict[str, Any]
 
@@ -45,75 +52,92 @@ def _encode(fields: Row) -> Row:
 
 def _decode(row: Row) -> Row:
     for col in _JSON_COLUMNS:
-        row[col] = json.loads(row.get(col) or "[]")
+        value = row.get(col)
+        row[col] = json.loads(value) if isinstance(value, str) else (value or [])
     return row
 
 
+def _column_sql(col: str) -> str:
+    """Bind placeholder for one column. ``required_resources`` arrives as JSON
+    text and needs an explicit jsonb cast (a bare ``text()`` query carries no
+    column typing); ``CAST(:x AS jsonb)`` not ``:x::jsonb`` because SQLAlchemy's
+    bind-param scanner rejects a name immediately followed by ``::``.
+    Datetime/date columns get native objects from the service layer - no cast.
+    """
+    return f"CAST(:{col} AS jsonb)" if col in _JSON_COLUMNS else f":{col}"
+
+
 class TaskRepository:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
-    def get(self, task_id: int) -> Row | None:
-        cur = self._conn.execute("SELECT * FROM task WHERE id = ?", (task_id,))
-        row = cur.fetchone()
+    async def get(self, task_id: int) -> Row | None:
+        result = await self._conn.execute(
+            text("SELECT * FROM task WHERE id = :id"), {"id": task_id}
+        )
+        row = result.mappings().first()
         return _decode(dict(row)) if row is not None else None
 
-    def list(
+    async def list(
         self, *, status: str | None = None, tree_id: int | None = None
     ) -> list[Row]:
         clauses: list[str] = []
-        params: list[Any] = []
+        params: dict[str, Any] = {}
         if status is not None:
-            clauses.append("status = ?")
-            params.append(status)
+            clauses.append("status = :status")
+            params["status"] = status
         if tree_id is not None:
-            clauses.append("tree_id = ?")
-            params.append(tree_id)
+            clauses.append("tree_id = :tree_id")
+            params["tree_id"] = tree_id
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        cur = self._conn.execute(
-            f"SELECT * FROM task{where} ORDER BY priority_score DESC, id ASC", params
+        result = await self._conn.execute(
+            text(f"SELECT * FROM task{where} ORDER BY priority_score DESC, id ASC"),
+            params,
         )
-        return [_decode(dict(r)) for r in cur.fetchall()]
+        return [_decode(dict(r)) for r in result.mappings().all()]
 
-    def list_pending(self, *, scheduled_before: str | None = None) -> list[Row]:
+    async def list_pending(self, *, scheduled_before: date | None = None) -> list[Row]:
         """Pending tasks, highest ``priority_score`` first.
 
-        ``scheduled_before`` (ISO date or datetime) keeps only tasks due on or
-        before that day *plus* any unscheduled task (those always need placing).
+        ``scheduled_before`` (a ``date``) keeps only tasks due on or before that
+        day *plus* any unscheduled task (those always need placing).
         """
         sql = "SELECT * FROM task WHERE status = 'pending'"
-        params: list[Any] = []
+        params: dict[str, Any] = {}
         if scheduled_before is not None:
-            sql += " AND (scheduled_date IS NULL OR date(scheduled_date) <= date(?))"
-            params.append(scheduled_before)
+            sql += " AND (scheduled_date IS NULL OR scheduled_date::date <= :before)"
+            params["before"] = scheduled_before
         sql += (
             " ORDER BY priority_score DESC,"
             " scheduled_date IS NULL, scheduled_date ASC, id ASC"
         )
-        return [_decode(dict(r)) for r in self._conn.execute(sql, params).fetchall()]
+        result = await self._conn.execute(text(sql), params)
+        return [_decode(dict(r)) for r in result.mappings().all()]
 
-    def create(self, data: Row) -> Row:
+    async def create(self, data: Row) -> Row:
         data = _encode(data)
         cols = [c for c in _INSERTABLE if c in data]
-        placeholders = ", ".join("?" for _ in cols)
-        cur = self._conn.execute(
-            f"INSERT INTO task ({', '.join(cols)}) VALUES ({placeholders})",
-            [data[c] for c in cols],
+        placeholders = ", ".join(_column_sql(c) for c in cols)
+        result = await self._conn.execute(
+            text(
+                f"INSERT INTO task ({', '.join(cols)}) VALUES ({placeholders}) RETURNING *"
+            ),
+            {c: data[c] for c in cols},
         )
-        row = self.get(int(cur.lastrowid))
-        assert row is not None  # just inserted
-        return row
+        return _decode(dict(result.mappings().one()))
 
-    def update(self, task_id: int, fields: Row) -> Row | None:
+    async def update(self, task_id: int, fields: Row) -> Row | None:
         allowed = _encode({k: v for k, v in fields.items() if k in _MUTABLE})
         if allowed:
-            assignments = ", ".join(f"{k} = ?" for k in allowed)
-            self._conn.execute(
-                f"UPDATE task SET {assignments} WHERE id = ?",
-                (*allowed.values(), task_id),
+            assignments = ", ".join(f"{k} = {_column_sql(k)}" for k in allowed)
+            await self._conn.execute(
+                text(f"UPDATE task SET {assignments} WHERE id = :task_id"),
+                {**allowed, "task_id": task_id},
             )
-        return self.get(task_id)
+        return await self.get(task_id)
 
-    def delete(self, task_id: int) -> bool:
-        cur = self._conn.execute("DELETE FROM task WHERE id = ?", (task_id,))
-        return cur.rowcount > 0
+    async def delete(self, task_id: int) -> bool:
+        result = await self._conn.execute(
+            text("DELETE FROM task WHERE id = :id"), {"id": task_id}
+        )
+        return result.rowcount > 0

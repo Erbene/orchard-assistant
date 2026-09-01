@@ -11,15 +11,14 @@ Two transports:
   Clients connect to ``/mcp/sse``.
 * **stdio** - ``python -m app.mcp_server`` (for Claude Desktop / Cursor).
 
-Every tool call gets its own short-lived SQLite connection, shared by every
-service and wrapped in a transaction. sqlite runs with
-``check_same_thread=False`` so the async tool body and the sync driver
-coexist safely on the event loop.
+Every tool call gets its own short-lived Postgres connection (from the same
+pooled engine the HTTP API uses - see ``app/core/db.py``), shared by every
+service and wrapped in a transaction.
 """
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -27,8 +26,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
 from .config import get_settings
-from .db import connect
-from .dependencies import _ensure_schema
+from .core import db
 from .rag.vector_store import get_vector_store
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
@@ -55,19 +53,17 @@ class _Services:
     sources: SourceService
 
 
-@contextlib.contextmanager
-def _session() -> Iterator[_Services]:
+@contextlib.asynccontextmanager
+async def _session() -> AsyncIterator[_Services]:
     """Yield connection-bound services. Commit on clean exit, roll back on any
-    exception, always close."""
+    exception (``db.connection`` handles both)."""
     settings = get_settings()
-    _ensure_schema(settings)
-    conn = connect(settings)
     validator = get_default_validation_agent()
-    zone_repo = ZoneRepository(conn)
-    tree_repo = TreeRepository(conn)
-    task_repo = TaskRepository(conn)
-    source_repo = SourceRepository(conn)
-    try:
+    async with db.connection(settings) as conn:
+        zone_repo = ZoneRepository(conn)
+        tree_repo = TreeRepository(conn)
+        task_repo = TaskRepository(conn)
+        source_repo = SourceRepository(conn)
         yield _Services(
             zones=ZoneService(zone_repo, validator),
             trees=TreeService(tree_repo, zone_repo, validator),
@@ -76,12 +72,6 @@ def _session() -> Iterator[_Services]:
                 source_repo, tree_repo, get_vector_store(settings), settings
             ),
         )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +86,7 @@ async def list_zones() -> list[dict]:
     ``soil_drainage`` (free text or null) and ``water_source`` (free text or
     null).
     """
-    with _session() as svc:
+    async with _session() as svc:
         return [z.model_dump(mode="json") for z in await svc.zones.list_zones()]
 
 
@@ -109,7 +99,7 @@ async def get_zone_details(zone_id: int) -> dict:
 
     Errors if no zone with that id exists.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             return (await svc.zones.get_zone(zone_id)).model_dump(mode="json")
         except DomainError as exc:
@@ -133,7 +123,7 @@ async def create_zone(
         water_source: Optional free text irrigation source, e.g. "well",
             "canal", "municipal".
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             created = await svc.zones.create_zone(
                 ZoneCreate(
@@ -174,7 +164,7 @@ async def update_zone(
         }.items()
         if value is not None
     }
-    with _session() as svc:
+    async with _session() as svc:
         try:
             updated = await svc.zones.update_zone(zone_id, ZoneUpdate(**patch))
         except DomainError as exc:
@@ -192,7 +182,7 @@ async def delete_zone(zone_id: int) -> str:
     Returns a short confirmation string. Errors if the zone does not exist,
     or if trees are still assigned to it (reassign or delete those first).
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             await svc.zones.delete_zone(zone_id)
         except DomainError as exc:
@@ -216,7 +206,7 @@ async def list_trees(zone_id: int | None = None) -> list[dict]:
     ``planted_date`` (ISO date or null) and the derived ``age_days`` /
     ``age_years``.
     """
-    with _session() as svc:
+    async with _session() as svc:
         rows = await svc.trees.list_trees(zone_id=zone_id)
         return [t.model_dump(mode="json") for t in rows]
 
@@ -230,7 +220,7 @@ async def get_tree_details(tree_id: int) -> dict:
 
     Errors if no tree with that id exists.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             return (await svc.trees.get_tree(tree_id)).model_dump(mode="json")
         except DomainError as exc:
@@ -259,7 +249,7 @@ async def create_tree(
         planted_date: Optional planting date as an ISO-8601 string (YYYY-MM-DD).
         notes: Optional free-text notes.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             created = await svc.trees.create_tree(
                 TreeCreate(
@@ -311,7 +301,7 @@ async def update_tree(
         }.items()
         if value is not None
     }
-    with _session() as svc:
+    async with _session() as svc:
         try:
             updated = await svc.trees.update_tree(tree_id, TreeUpdate(**patch))
         except DomainError as exc:
@@ -328,7 +318,7 @@ async def delete_tree(tree_id: int) -> str:
 
     Returns a short confirmation string. Errors if the tree does not exist.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             await svc.trees.delete_tree(tree_id)
         except DomainError as exc:
@@ -362,7 +352,7 @@ async def get_pending_tasks(scheduled_before: str | None = None) -> list[dict]:
     ``created_at`` and ``completed_at``.
     """
     before = _parse_dt(scheduled_before, field="scheduled_before")
-    with _session() as svc:
+    async with _session() as svc:
         rows = await svc.tasks.get_pending_queue(scheduled_before=before)
         return [t.model_dump(mode="json") for t in rows]
 
@@ -376,7 +366,7 @@ async def get_task_details(task_id: int) -> dict:
 
     Errors if no task with that id exists.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             return (await svc.tasks.get_task(task_id)).model_dump(mode="json")
         except DomainError as exc:
@@ -412,7 +402,7 @@ async def create_task(
         frequency_days: Optional positive integer. If set, completing the task
             spawns the next occurrence ``frequency_days`` later.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             created = await svc.tasks.create_task(
                 TaskCreate(
@@ -456,7 +446,7 @@ async def create_baseline_tasks(tree_id: int, tasks: list[dict]) -> list[dict]:
     except Exception as exc:  # noqa: BLE001 - malformed input -> clean tool error
         raise ToolError(f"Invalid tasks payload: {exc}") from exc
 
-    with _session() as svc:
+    async with _session() as svc:
         try:
             created = await svc.tasks.create_baseline_tasks(tree_id, items)
         except DomainError as exc:
@@ -489,7 +479,7 @@ async def batch_update_task_priorities(task_updates: list[dict]) -> list[dict]:
     except Exception as exc:  # noqa: BLE001 - malformed input -> clean tool error
         raise ToolError(f"Invalid task_updates payload: {exc}") from exc
 
-    with _session() as svc:
+    async with _session() as svc:
         try:
             updated = await svc.tasks.batch_update_priorities(changes)
         except DomainError as exc:
@@ -508,7 +498,7 @@ async def mark_task_complete(task_id: int) -> dict:
 
     Returns the completed task object. Errors if the task does not exist.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             return (await svc.tasks.mark_complete(task_id)).model_dump(mode="json")
         except DomainError as exc:
@@ -525,7 +515,7 @@ async def defer_task(task_id: int, until: str | None = None) -> dict:
 
     Returns the updated task object. Errors if the task does not exist.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             return (
                 await svc.tasks.defer_task(
@@ -548,7 +538,7 @@ async def list_sources() -> list[dict]:
     chunked into the vector store. A source only becomes searchable for a tree
     once it is linked with ``link_tree_sources``.
     """
-    with _session() as svc:
+    async with _session() as svc:
         return [s.model_dump(mode="json") for s in await svc.sources.list_sources()]
 
 
@@ -563,7 +553,7 @@ async def add_text_source(name: str, text: str) -> dict:
 
     After adding, call ``link_tree_sources`` to make it searchable for a tree.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             created = await svc.sources.ingest_text(name, text)
         except DomainError as exc:
@@ -582,7 +572,7 @@ async def link_tree_sources(tree_id: int, source_ids: list[int]) -> list[dict]:
         source_ids: Source ids to link (from ``list_sources``). Pass ``[]`` to
             unlink everything.
     """
-    with _session() as svc:
+    async with _session() as svc:
         try:
             linked = await svc.sources.set_tree_sources(tree_id, source_ids)
         except DomainError as exc:
@@ -610,11 +600,11 @@ async def search_knowledge(query: str, tree_id: int | None = None) -> str:
     short notice if nothing was ingested / matched. Cite the source id(s) in
     your answer.
     """
-    with _session() as svc:
+    async with _session() as svc:
         scope: list[int] | None = None
         if tree_id is not None:
             try:
-                scope = svc.sources.allowed_source_ids(tree_id)
+                scope = await svc.sources.allowed_source_ids(tree_id)
             except DomainError as exc:
                 raise ToolError(str(exc)) from exc
             if not scope:
@@ -659,7 +649,7 @@ async def system_summary() -> str:
     tree tally, and overall system status.
     """
     try:
-        with _session() as svc:
+        async with _session() as svc:
             zone_rows = await svc.zones.list_zones()
             tree_rows = await svc.trees.list_trees()
             all_tasks = await svc.tasks.list_tasks()

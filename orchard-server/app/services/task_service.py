@@ -21,12 +21,8 @@ from ..schemas.task import (
 from .exceptions import DomainValidationError, NotFoundError
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat(timespec="seconds") if value is not None else None
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class TaskService:
@@ -41,11 +37,11 @@ class TaskService:
     ) -> list[TaskRead]:
         return [
             TaskRead.model_validate(r)
-            for r in self._tasks.list(status=status, tree_id=tree_id)
+            for r in await self._tasks.list(status=status, tree_id=tree_id)
         ]
 
     async def get_task(self, task_id: int) -> TaskRead:
-        row = self._tasks.get(task_id)
+        row = await self._tasks.get(task_id)
         if row is None:
             raise NotFoundError(f"task {task_id} not found")
         return TaskRead.model_validate(row)
@@ -53,20 +49,22 @@ class TaskService:
     async def get_pending_queue(
         self, *, scheduled_before: datetime | None = None
     ) -> list[TaskRead]:
-        rows = self._tasks.list_pending(scheduled_before=_iso(scheduled_before))
+        rows = await self._tasks.list_pending(
+            scheduled_before=scheduled_before.date() if scheduled_before else None
+        )
         return [TaskRead.model_validate(r) for r in rows]
 
     # -- writes -----------------------------------------------------
 
     async def create_task(self, payload: TaskCreate) -> TaskRead:
-        self._require_tree(payload.tree_id)
-        row = self._tasks.create(
+        await self._require_tree(payload.tree_id)
+        row = await self._tasks.create(
             {
                 "tree_id": payload.tree_id,
                 "action_type": payload.action_type.strip(),
                 "status": payload.status,
                 "priority_score": payload.priority_score,
-                "scheduled_date": _iso(payload.scheduled_date),
+                "scheduled_date": payload.scheduled_date,
                 "frequency_days": payload.frequency_days,
                 "estimated_minutes": payload.estimated_minutes,
                 "required_resources": payload.required_resources,
@@ -75,13 +73,13 @@ class TaskService:
         return TaskRead.model_validate(row)
 
     async def update_task(self, task_id: int, payload: TaskUpdate) -> TaskRead:
-        current = self._tasks.get(task_id)
+        current = await self._tasks.get(task_id)
         if current is None:
             raise NotFoundError(f"task {task_id} not found")
 
         patch = payload.model_dump(exclude_unset=True)
         if "scheduled_date" in patch:
-            patch["scheduled_date"] = _iso(payload.scheduled_date)
+            patch["scheduled_date"] = payload.scheduled_date
         if patch.get("action_type"):
             patch["action_type"] = patch["action_type"].strip()
 
@@ -89,41 +87,39 @@ class TaskService:
             was_completed = current["status"] == "completed"
             now_completed = patch["status"] == "completed"
             if now_completed and not was_completed:
-                patch["completed_at"] = _now_iso()
+                patch["completed_at"] = _now()
             elif was_completed and not now_completed:
                 patch["completed_at"] = None
 
-        row = self._tasks.update(task_id, patch)
+        row = await self._tasks.update(task_id, patch)
         return TaskRead.model_validate(row)
 
     async def delete_task(self, task_id: int) -> None:
-        if not self._tasks.delete(task_id):
+        if not await self._tasks.delete(task_id):
             raise NotFoundError(f"task {task_id} not found")
 
     async def mark_complete(self, task_id: int) -> TaskRead:
         """Mark a task ``completed``. If it recurs, spawn the next occurrence."""
-        current = self._tasks.get(task_id)
+        current = await self._tasks.get(task_id)
         if current is None:
             raise NotFoundError(f"task {task_id} not found")
         if current["status"] == "completed":
             return TaskRead.model_validate(current)
 
-        row = self._tasks.update(
-            task_id, {"status": "completed", "completed_at": _now_iso()}
+        row = await self._tasks.update(
+            task_id, {"status": "completed", "completed_at": _now()}
         )
         completed = TaskRead.model_validate(row)
 
         if completed.frequency_days:
             anchor = completed.scheduled_date or datetime.now(timezone.utc)
-            self._tasks.create(
+            await self._tasks.create(
                 {
                     "tree_id": completed.tree_id,
                     "action_type": completed.action_type,
                     "status": "pending",
                     "priority_score": completed.priority_score,
-                    "scheduled_date": _iso(
-                        anchor + timedelta(days=completed.frequency_days)
-                    ),
+                    "scheduled_date": anchor + timedelta(days=completed.frequency_days),
                     "frequency_days": completed.frequency_days,
                     "estimated_minutes": completed.estimated_minutes,
                     "required_resources": completed.required_resources,
@@ -134,12 +130,12 @@ class TaskService:
     async def defer_task(
         self, task_id: int, *, until: datetime | None = None
     ) -> TaskRead:
-        if self._tasks.get(task_id) is None:
+        if await self._tasks.get(task_id) is None:
             raise NotFoundError(f"task {task_id} not found")
         patch: dict[str, object] = {"status": "deferred"}
         if until is not None:
-            patch["scheduled_date"] = _iso(until)
-        return TaskRead.model_validate(self._tasks.update(task_id, patch))
+            patch["scheduled_date"] = until
+        return TaskRead.model_validate(await self._tasks.update(task_id, patch))
 
     async def batch_update_priorities(
         self, updates: Sequence[TaskPriorityUpdate]
@@ -153,11 +149,11 @@ class TaskService:
             if change.priority_score is not None:
                 patch["priority_score"] = change.priority_score
             if change.scheduled_date is not None:
-                patch["scheduled_date"] = _iso(change.scheduled_date)
+                patch["scheduled_date"] = change.scheduled_date
             row = (
-                self._tasks.update(change.task_id, patch)
+                await self._tasks.update(change.task_id, patch)
                 if patch
-                else self._tasks.get(change.task_id)
+                else await self._tasks.get(change.task_id)
             )
             if row is None:
                 raise NotFoundError(f"task {change.task_id} not found")
@@ -172,19 +168,19 @@ class TaskService:
         Each item must carry ``estimated_minutes`` and ``required_resources`` -
         the JIT scheduler needs them from the start.
         """
-        self._require_tree(tree_id)
+        await self._require_tree(tree_id)
         if not items:
             raise DomainValidationError("items", "at least one baseline task is required")
 
         created: list[TaskRead] = []
         for item in items:
-            row = self._tasks.create(
+            row = await self._tasks.create(
                 {
                     "tree_id": tree_id,
                     "action_type": item.action_type.strip(),
                     "status": "pending",
                     "priority_score": item.priority_score,
-                    "scheduled_date": _iso(item.scheduled_date),
+                    "scheduled_date": item.scheduled_date,
                     "frequency_days": item.frequency_days,
                     "estimated_minutes": item.estimated_minutes,
                     "required_resources": item.required_resources,
@@ -195,6 +191,6 @@ class TaskService:
 
     # -- helpers ---------------------------------------------------
 
-    def _require_tree(self, tree_id: int) -> None:
-        if self._trees.get(tree_id) is None:
+    async def _require_tree(self, tree_id: int) -> None:
+        if await self._trees.get(tree_id) is None:
             raise DomainValidationError("tree_id", f"tree {tree_id} does not exist")

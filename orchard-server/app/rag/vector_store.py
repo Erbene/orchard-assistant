@@ -1,6 +1,10 @@
 """ChromaDB wrapper for the orchard knowledge base.
 
-One persistent collection (``orchard_knowledge``). Every chunk carries
+Talks to the ``chromadb`` docker-compose service over HTTP (see
+``app/core/vector_db.py`` for the raw client - no auth, no embedded/on-disk
+mode). One collection per ``Settings.chroma_collection`` (default
+``orchard_knowledge``; the test suite points it at ``orchard_knowledge_test``
+so tests never touch real data). Every chunk carries
 ``metadata = {"source_id": <sql id>}`` so the Consensus Fusion RAG tool can
 run isolated per-source searches with ``where={"source_id": id}``.
 
@@ -11,22 +15,23 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-import chromadb
+from chromadb.api import ClientAPI
+from chromadb.api.models.Collection import Collection
 
 from ..config import Settings, get_settings
 from ..core.logging import get_logger
+from ..core.vector_db import get_chroma_client
 
-_COLLECTION = "orchard_knowledge"
 _log = get_logger("app.rag.chroma")
 
 
 class OrchardVectorStore:
-    def __init__(self, path: str) -> None:
-        self._client = chromadb.PersistentClient(path=path)
-        self._collection = self._client.get_or_create_collection(_COLLECTION)
+    def __init__(self, client: ClientAPI, *, collection: str) -> None:
+        self._collection: Collection = client.get_or_create_collection(
+            collection, metadata={"hnsw:space": "cosine"}
+        )
         _log.info(
-            "chroma.ready", path=path, collection=_COLLECTION,
-            documents=self._collection.count(),
+            "chroma.ready", collection=collection, documents=self._collection.count()
         )
 
     def add_source_chunks(self, source_id: int, chunks: list[str]) -> int:
@@ -85,8 +90,16 @@ class OrchardVectorStore:
         )
         return pairs
 
+    def clear(self) -> None:
+        """Delete every document in the collection. Test-only (disposable KB)."""
+        ids = self._collection.get()["ids"]
+        if ids:
+            self._collection.delete(ids=ids)
+
 
 @lru_cache
 def get_vector_store(settings: Settings | None = None) -> OrchardVectorStore:
-    """Process-wide singleton (the Chroma client is not cheap to build)."""
-    return OrchardVectorStore((settings or get_settings()).chroma_path)
+    """Process-wide singleton per ``Settings`` (the Chroma client + collection
+    handle are not cheap to build)."""
+    settings = settings or get_settings()
+    return OrchardVectorStore(get_chroma_client(), collection=settings.chroma_collection)

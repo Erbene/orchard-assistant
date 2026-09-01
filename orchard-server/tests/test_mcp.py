@@ -56,14 +56,14 @@ def _payload(result: Any) -> Any:
     return None
 
 
-async def _exercise(db_path: str) -> None:
+async def _exercise() -> None:
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "app.mcp_server"],
         cwd=str(SERVER_ROOT),
         env={
-            "ORCHARD_DB_PATH": db_path,
-            "ORCHARD_CHROMA_PATH": str(Path(db_path).with_name("chroma")),
+            "POSTGRES_DB": "orchard_test",
+            "CHROMA_COLLECTION": "orchard_knowledge_test",
             "PYTHONPATH": str(SERVER_ROOT),
         },
     )
@@ -165,5 +165,5 @@ async def _exercise(db_path: str) -> None:
             assert missing.isError  # DomainError -> ToolError -> isError
 
 
-def test_mcp_stdio_round_trip(tmp_path: Path) -> None:
-    asyncio.run(_exercise(str(tmp_path / "mcp.db")))
+def test_mcp_stdio_round_trip() -> None:
+    asyncio.run(_exercise())

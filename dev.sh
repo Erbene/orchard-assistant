@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Start the orchard backend (FastAPI :8000) and frontend (Next :3000) together
 # in this terminal.  Ctrl+C stops both.  Usage:  ./dev.sh
+#
+# There is no SQLite: the app always talks to the Postgres + Chroma
+# containers, so this brings those up first (host-bound to 127.0.0.1).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 py="$root/orchard-server/.venv/Scripts/python.exe"
@@ -8,6 +11,9 @@ py="$root/orchard-server/.venv/Scripts/python.exe"
 
 [ -x "$py" ] || { echo "No venv. Run: cd orchard-server && python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt"; exit 1; }
 [ -d "$root/orchard-web/node_modules" ] || { echo "No node_modules. Run: cd orchard-web && npm install"; exit 1; }
+
+echo "Bringing up postgres + chromadb (docker compose)..."
+docker compose -f "$root/orchard-server/docker-compose.yml" up -d --wait postgres chromadb
 
 pids=()
 cleanup() {

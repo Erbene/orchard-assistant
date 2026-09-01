@@ -1,8 +1,10 @@
 """Raw persistence for the ``tree`` table."""
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 Row = dict[str, Any]
 
@@ -19,57 +21,60 @@ _MUTABLE = tuple(c for c in _COLUMNS if c != "tree_id")
 
 
 class TreeRepository:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
-    def list(
+    async def list(
         self, *, species: str | None = None, zone_id: int | None = None
     ) -> list[Row]:
         clauses: list[str] = []
-        params: list[Any] = []
+        params: dict[str, Any] = {}
         if species is not None:
-            clauses.append("species = ?")
-            params.append(species)
+            clauses.append("species = :species")
+            params["species"] = species
         if zone_id is not None:
-            clauses.append("zone_id = ?")
-            params.append(zone_id)
+            clauses.append("zone_id = :zone_id")
+            params["zone_id"] = zone_id
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        cur = self._conn.execute(
-            f"SELECT * FROM tree{where} ORDER BY tree_id", params
+        result = await self._conn.execute(
+            text(f"SELECT * FROM tree{where} ORDER BY tree_id"), params
         )
-        return [dict(r) for r in cur.fetchall()]
+        return [dict(r) for r in result.mappings().all()]
 
-    def get(self, tree_id: int) -> Row | None:
-        cur = self._conn.execute("SELECT * FROM tree WHERE tree_id = ?", (tree_id,))
-        row = cur.fetchone()
+    async def get(self, tree_id: int) -> Row | None:
+        result = await self._conn.execute(
+            text("SELECT * FROM tree WHERE tree_id = :id"), {"id": tree_id}
+        )
+        row = result.mappings().first()
         return dict(row) if row is not None else None
 
-    def create(self, data: Row) -> Row:
+    async def create(self, data: Row) -> Row:
         # Insert every mutable column, plus tree_id when the caller supplied one.
         cols = list(_MUTABLE)
-        values: list[Any] = [data.get(c) for c in cols]
         if data.get("tree_id") is not None:
             cols = ["tree_id", *cols]
-            values = [data["tree_id"], *values]
-        placeholders = ", ".join("?" for _ in cols)
-        cur = self._conn.execute(
-            f"INSERT INTO tree ({', '.join(cols)}) VALUES ({placeholders})", values
+        placeholders = ", ".join(f":{c}" for c in cols)
+        params = {c: data.get(c) for c in cols}
+        result = await self._conn.execute(
+            text(
+                f"INSERT INTO tree ({', '.join(cols)}) VALUES ({placeholders}) RETURNING *"
+            ),
+            params,
         )
-        new_id = data["tree_id"] if data.get("tree_id") is not None else cur.lastrowid
-        row = self.get(int(new_id))
-        assert row is not None
-        return row
+        return dict(result.mappings().one())
 
-    def update(self, tree_id: int, fields: Row) -> Row | None:
+    async def update(self, tree_id: int, fields: Row) -> Row | None:
         allowed = {k: v for k, v in fields.items() if k in _MUTABLE}
         if allowed:
-            assignments = ", ".join(f"{k} = ?" for k in allowed)
-            self._conn.execute(
-                f"UPDATE tree SET {assignments} WHERE tree_id = ?",
-                (*allowed.values(), tree_id),
+            assignments = ", ".join(f"{k} = :{k}" for k in allowed)
+            await self._conn.execute(
+                text(f"UPDATE tree SET {assignments} WHERE tree_id = :tree_id"),
+                {**allowed, "tree_id": tree_id},
             )
-        return self.get(tree_id)
+        return await self.get(tree_id)
 
-    def delete(self, tree_id: int) -> bool:
-        cur = self._conn.execute("DELETE FROM tree WHERE tree_id = ?", (tree_id,))
-        return cur.rowcount > 0
+    async def delete(self, tree_id: int) -> bool:
+        result = await self._conn.execute(
+            text("DELETE FROM tree WHERE tree_id = :id"), {"id": tree_id}
+        )
+        return result.rowcount > 0

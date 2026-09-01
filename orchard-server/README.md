@@ -1,9 +1,11 @@
 # Orchard Assistant API
 
-FastAPI + SQLite service for orchard **zones**, **trees** and **tasks**, built
-as a clean layered architecture. No ORM — DDL lives in `sql/schema.sql`,
-repositories issue raw SQL and return `dict` rows, and "models" are the
-Pydantic schemas in `schemas/`.
+FastAPI service for orchard **zones**, **trees** and **tasks**, built as a
+clean layered architecture. No ORM — DDL lives in `docker/postgres/init.sql`,
+repositories issue raw SQL (`sqlalchemy.text`) over an async **PostgreSQL +
+pgvector** connection and return `dict` rows, and "models" are the Pydantic
+schemas in `schemas/`. The vector store is a **ChromaDB HTTP server**. Both
+run as containers (`docker-compose.yml`) — there is no SQLite / embedded mode.
 
 ## Layers
 
@@ -11,12 +13,14 @@ Pydantic schemas in `schemas/`.
 app/
   main.py            composition root: app, routers, exception handlers, lifespan
   config.py          Settings (env-driven, framework-free)
-  db.py              sqlite connection + schema bootstrap (no HTTP, no Pydantic)
+  core/db.py         async SQLAlchemy engine cache + connection ctx manager
+  core/vector_db.py  Chroma HTTP client (no auth)
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
   mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
-  sql/schema.sql     DDL
   rag/               chunking, file text extraction, ChromaDB wrapper
   agent/             LangGraph orchestration skeleton (state / graph / MCP client)
+docker/postgres/init.sql   the schema (extensions + DDL), run on first container boot
+scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
   api/               HTTP LAYER - request/response, status codes, delegation only
     routes/          zones.py  trees.py  sources.py  chat.py
@@ -35,7 +39,7 @@ app/
 **Dependency flow (per request):**
 `get_settings_dep -> get_connection -> {get_zone_repository, get_tree_repository} + get_validation_agent -> {get_zone_service, get_tree_service} -> route handler`
 
-FastAPI caches sub-dependencies per request, so one `sqlite3.Connection` is
+FastAPI caches sub-dependencies per request, so one `AsyncConnection` is
 shared by every repository in a request and the request behaves as a single
 transaction (commit on success, rollback on exception).
 
@@ -112,9 +116,10 @@ conversation by the agent, not stored.
 - `TaskRepository.list_pending(scheduled_before=…)` — pending only, `priority_score`
   DESC; the date filter keeps due-by tasks plus unscheduled ones.
 
-**No manual migration:** `init_db` runs the DDL (`DROP TABLE IF EXISTS
-user_context`, `CREATE TABLE IF NOT EXISTS sources/tree_sources`) and
-`ALTER TABLE task ADD COLUMN` for the two new columns on an existing DB.
+**Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
+applied once when the `postgres` container's volume is first created (and by
+`tests/conftest.py` against the disposable `orchard_test` database). To pick
+up schema changes, `docker compose down -v` and back up.
 
 ### Knowledge base (Consensus Fusion RAG)
 
@@ -162,8 +167,9 @@ is meant to stay.
 
 [app/mcp_server.py](app/mcp_server.py) exposes the same `ZoneService` /
 `TreeService` logic as MCP tools + a resource, for AI-agent clients. It reuses
-the service layer directly (one short-lived SQLite connection per call,
-wrapped in a transaction) — no HTTP calls to self.
+the service layer directly (one short-lived Postgres connection per call from
+the same pooled engine the HTTP API uses, wrapped in a transaction) — no HTTP
+calls to self.
 
 **Tools:**
 - zones — `list_zones`, `get_zone_details`, `create_zone`, `update_zone`, `delete_zone`
@@ -194,16 +200,47 @@ For Claude Desktop, drop [claude_desktop_config.json](claude_desktop_config.json
 into `%APPDATA%\Claude\claude_desktop_config.json` (merge the `mcpServers` key)
 and restart the app.
 
-## Run
+## Running
+
+Everything talks to the **`postgres`** and **`chromadb`** containers in
+[docker-compose.yml](docker-compose.yml) — hardened on an isolated
+`orchard-net` bridge, every port bound to `127.0.0.1`, 4 GB memory caps,
+health checks, Postgres tuned for a 64 GB host, no app-layer auth (Postgres
+still enforces its password). There is no SQLite fallback.
+
+Host ports: **Postgres `5433`** (container 5432 — 5432 is left for a native
+install), **Chroma `8001`** (container 8000 — 8000 is the bare-metal uvicorn),
+backend `8000`, frontend `3000`. `Settings` defaults and `.env.example` match.
 
 ```sh
 cd orchard-server
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Windows
-uvicorn app.main:app --reload
+cp .env.example .env        # set POSTGRES_PASSWORD
 ```
 
-Docs: http://127.0.0.1:8000/docs · DB path via `ORCHARD_DB_PATH` (default `orchard-server/orchard.db`).
+**Full stack in Docker** — Postgres, Chroma, backend, frontend:
+
+```sh
+docker compose up -d --build
+docker compose ps           # wait for all four "healthy"
+#   backend  -> http://127.0.0.1:8000/docs
+#   frontend -> http://127.0.0.1:3000
+```
+
+**Bare-metal app, containerised data** (fast iteration):
+
+```sh
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt   # Windows
+../dev.ps1          # brings up postgres + chromadb, then uvicorn --reload + npm run dev
+```
+
+- [docker/postgres/init.sql](docker/postgres/init.sql) — `CREATE EXTENSION vector`
+  + the DDL (identity PKs, `TIMESTAMPTZ`, `JSONB`, plus a `source_chunks`
+  table with a `vector(384)` HNSW index). Runs once, on first container boot.
+- [app/core/db.py](app/core/db.py) — async SQLAlchemy engine cache +
+  `connection(settings)` context manager (the per-request unit of work).
+- [app/core/vector_db.py](app/core/vector_db.py) — unauthenticated
+  `chromadb.HttpClient`.
 
 ## Test
 
@@ -211,3 +248,10 @@ Docs: http://127.0.0.1:8000/docs · DB path via `ORCHARD_DB_PATH` (default `orch
 cd orchard-server
 .venv/Scripts/python -m pytest
 ```
+
+Tests need Docker running. The session fixture ([tests/conftest.py](tests/conftest.py))
+runs `docker compose up -d --wait postgres chromadb`, then works against a
+**disposable** slice of those same containers — Postgres database
+`orchard_test` and Chroma collection `orchard_knowledge_test`, both reset
+between tests. Your real `orchard` data is never touched. Containers are left
+running afterward.

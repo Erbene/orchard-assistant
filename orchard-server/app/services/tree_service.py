@@ -2,8 +2,9 @@
 and derived age. HTTP-agnostic; returns Pydantic models."""
 from __future__ import annotations
 
-import sqlite3
 from datetime import date
+
+from sqlalchemy.exc import IntegrityError
 
 from ..repositories.tree_repository import TreeRepository
 from ..repositories.zone_repository import ZoneRepository
@@ -12,15 +13,17 @@ from .exceptions import ConflictError, DomainValidationError, NotFoundError
 from .validators import ValidationAgent
 
 
-def derive_age(planted_date: str | None) -> tuple[int | None, float | None]:
-    """Age from an ISO date string. Never stored - computed on every read."""
+def derive_age(planted_date: date | str | None) -> tuple[int | None, float | None]:
+    """Age from a planted date (a ``date`` from Postgres, or an ISO string).
+    Never stored - computed on every read."""
     if not planted_date:
         return None, None
-    try:
-        planted = date.fromisoformat(planted_date)
-    except ValueError:
-        return None, None
-    days = (date.today() - planted).days
+    if not isinstance(planted_date, date):
+        try:
+            planted_date = date.fromisoformat(str(planted_date))
+        except ValueError:
+            return None, None
+    days = (date.today() - planted_date).days
     return days, round(days / 365.25, 2)
 
 
@@ -38,11 +41,11 @@ class TreeService:
     async def list_trees(
         self, *, species: str | None = None, zone_id: int | None = None
     ) -> list[TreeRead]:
-        rows = self._trees.list(species=species, zone_id=zone_id)
+        rows = await self._trees.list(species=species, zone_id=zone_id)
         return [self._to_read(r) for r in rows]
 
     async def get_tree(self, tree_id: int) -> TreeRead:
-        row = self._trees.get(tree_id)
+        row = await self._trees.get(tree_id)
         if row is None:
             raise NotFoundError(f"tree {tree_id} not found")
         return self._to_read(row)
@@ -53,18 +56,18 @@ class TreeService:
             "species": await self._normalize("species", payload.species),
             "variety": await self._normalize("variety", payload.variety),
             "zone_id": await self._check_zone(payload.zone_id),
-            "planted_date": payload.planted_date.isoformat() if payload.planted_date else None,
+            "planted_date": payload.planted_date,
             "additional_context": payload.additional_context,
             "notes": payload.notes,
         }
         try:
-            row = self._trees.create(record)
-        except sqlite3.IntegrityError as exc:
+            row = await self._trees.create(record)
+        except IntegrityError as exc:
             raise ConflictError(f"tree {payload.tree_id} already exists") from exc
         return self._to_read(row)
 
     async def update_tree(self, tree_id: int, payload: TreeUpdate) -> TreeRead:
-        if self._trees.get(tree_id) is None:
+        if await self._trees.get(tree_id) is None:
             raise NotFoundError(f"tree {tree_id} not found")
 
         patch = payload.model_dump(exclude_unset=True)
@@ -74,14 +77,13 @@ class TreeService:
             patch["variety"] = await self._normalize("variety", patch["variety"])
         if "zone_id" in patch:
             patch["zone_id"] = await self._check_zone(patch["zone_id"])
-        if "planted_date" in patch and patch["planted_date"] is not None:
-            patch["planted_date"] = patch["planted_date"].isoformat()
+        # planted_date stays a date object (model_dump keeps it as such)
 
-        row = self._trees.update(tree_id, patch)
+        row = await self._trees.update(tree_id, patch)
         return self._to_read(row)
 
     async def delete_tree(self, tree_id: int) -> None:
-        if not self._trees.delete(tree_id):
+        if not await self._trees.delete(tree_id):
             raise NotFoundError(f"tree {tree_id} not found")
 
     # -- helpers -------------------------------------------------------
@@ -96,7 +98,7 @@ class TreeService:
     async def _check_zone(self, zone_id: int | None) -> int | None:
         if zone_id is None:
             return None
-        if not self._zones.exists(zone_id):
+        if not await self._zones.exists(zone_id):
             raise DomainValidationError("zone_id", f"zone {zone_id} does not exist")
         return zone_id
 

@@ -5,6 +5,10 @@ httpx==0.28.1
 structlog>=24,<27
 mcp>=1.29,<2
 
+# PostgreSQL (docker-compose data layer — app/core/db.py)
+sqlalchemy[asyncio]>=2.0,<3
+asyncpg>=0.30
+
 # RAG knowledge base
 chromadb>=1.5,<2
 pypdf>=5

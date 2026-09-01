@@ -38,25 +38,25 @@ class SourceService:
     # -- reads / CRUD ---------------------------------------------
 
     async def list_sources(self) -> list[SourceRead]:
-        return [SourceRead.model_validate(r) for r in self._sources.list()]
+        return [SourceRead.model_validate(r) for r in await self._sources.list()]
 
     async def get_source(self, source_id: int) -> SourceDetail:
-        row = self._sources.get(source_id)
+        row = await self._sources.get(source_id)
         if row is None:
             raise NotFoundError(f"source {source_id} not found")
         return SourceDetail.model_validate(row)
 
     async def rename_source(self, source_id: int, name: str) -> SourceRead:
-        row = self._sources.rename(source_id, name.strip())
+        row = await self._sources.rename(source_id, name.strip())
         if row is None:
             raise NotFoundError(f"source {source_id} not found")
         return SourceRead.model_validate(row)
 
     async def delete_source(self, source_id: int) -> None:
-        if not self._sources.exists(source_id):
+        if not await self._sources.exists(source_id):
             raise NotFoundError(f"source {source_id} not found")
-        self._store.delete_source(source_id)  # drop its chunks from Chroma
-        self._sources.delete(source_id)       # FK cascade clears tree_sources
+        self._store.delete_source(source_id)        # drop its chunks from Chroma
+        await self._sources.delete(source_id)        # FK cascade clears tree_sources
         _log.info("rag.source.deleted", source_id=source_id)
 
     # -- ingestion ----------------------------------------------
@@ -64,7 +64,7 @@ class SourceService:
     async def ingest_text(self, name: str, text: str) -> SourceRead:
         if not text.strip():
             raise DomainValidationError("text", "text payload is empty")
-        row = self._sources.create(
+        row = await self._sources.create(
             name=name.strip(), source_type="text", raw_content=text
         )
         self._embed(row["id"], text)
@@ -84,11 +84,11 @@ class SourceService:
         if not text.strip():
             raise DomainValidationError("file", "no extractable text in file")
 
-        row = self._sources.create(
+        row = await self._sources.create(
             name=name.strip(), source_type="file", raw_content=text
         )
         path = self._save_upload(row["id"], filename, data)
-        self._sources.set_file_path(row["id"], str(path))
+        await self._sources.set_file_path(row["id"], str(path))
         self._embed(row["id"], text)
         _log.info(
             "rag.source.ingested",
@@ -100,28 +100,28 @@ class SourceService:
     # -- tree <-> source links ---------------------------------
 
     async def sources_for_tree(self, tree_id: int) -> list[SourceRead]:
-        self._require_tree(tree_id)
+        await self._require_tree(tree_id)
         return [
             SourceRead.model_validate(r)
-            for r in self._sources.sources_for_tree(tree_id)
+            for r in await self._sources.sources_for_tree(tree_id)
         ]
 
     async def set_tree_sources(
         self, tree_id: int, source_ids: list[int]
     ) -> list[SourceRead]:
-        self._require_tree(tree_id)
-        missing = [sid for sid in source_ids if not self._sources.exists(sid)]
+        await self._require_tree(tree_id)
+        missing = [sid for sid in source_ids if not await self._sources.exists(sid)]
         if missing:
             raise DomainValidationError(
                 "source_ids", f"unknown source id(s): {missing}"
             )
-        self._sources.set_tree_links(tree_id, source_ids)
+        await self._sources.set_tree_links(tree_id, source_ids)
         _log.info("rag.source.linked", tree_id=tree_id, source_ids=source_ids)
         return await self.sources_for_tree(tree_id)
 
-    def allowed_source_ids(self, tree_id: int) -> list[int]:
+    async def allowed_source_ids(self, tree_id: int) -> list[int]:
         """Source ids linked to a tree (used to scope the RAG fusion tool)."""
-        return self._sources.source_ids_for_tree(tree_id)
+        return await self._sources.source_ids_for_tree(tree_id)
 
     # -- retrieval --------------------------------------------
 
@@ -149,7 +149,7 @@ class SourceService:
                     )
                 ]
 
-        names = {row["id"]: row["name"] for row in self._sources.list()}
+        names = {row["id"]: row["name"] for row in await self._sources.list()}
         grouped: dict[int, list[str]] = {}
         for sid, chunk in pairs:
             grouped.setdefault(sid, []).append(chunk)
@@ -185,6 +185,6 @@ class SourceService:
         path.write_bytes(data)
         return path
 
-    def _require_tree(self, tree_id: int) -> None:
-        if self._trees.get(tree_id) is None:
+    async def _require_tree(self, tree_id: int) -> None:
+        if await self._trees.get(tree_id) is None:
             raise NotFoundError(f"tree {tree_id} not found")

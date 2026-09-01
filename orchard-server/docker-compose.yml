@@ -1,0 +1,198 @@
+# The Orchard Management System stack.
+# 100% local: no app-layer auth, every port bound to 127.0.0.1, one isolated
+# bridge network. Tuned for a 64 GB / 16-core (Ryzen 9) host.
+#
+#   docker compose up -d --build          # full stack: postgres, chromadb, backend, frontend
+#   docker compose up -d --wait postgres chromadb   # just the data layer (dev.ps1 / pytest)
+#   docker compose ps                     # watch health
+#   docker compose down                   # stop; keeps volumes  (add -v to wipe data + schema)
+#
+# Host ports: postgres 5433 (container 5432), chromadb 8001 (container 8000),
+# backend 8000, frontend 3000. `docker compose up` honours `deploy.resources`.
+
+name: orchard
+
+networks:
+  orchard-net:
+    name: orchard-net
+    driver: bridge
+    # not `internal: true` — the 127.0.0.1 port bindings are the host boundary,
+    # and the app (running on the host, not in a container) must reach them.
+
+volumes:
+  postgres_data:
+    name: orchard_postgres_data
+  chroma_data:
+    name: orchard_chroma_data
+  uploads_data:
+    name: orchard_uploads_data
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    networks: [orchard-net]
+    ports:
+      # host 5433 to sidestep a native/other Postgres on 5432; container stays
+      # 5432, which the backend service and the in-container healthcheck use.
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orchard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchard}
+      POSTGRES_DB: ${POSTGRES_DB:-orchard}
+      # data dir as a sub-path of the volume (recommended: keeps the mount
+      # point clean, survives lost+found on some drivers)
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - "postgres"
+      # --- explicit tuning for a 64 GB host (container capped at 4 GB below) ---
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "work_mem=64MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "effective_cache_size=16GB"       # planner hint only (not an allocation)
+      - "-c"
+      - "max_connections=100"
+      # --- NVMe / 16-core companions ---
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
+      - "-c"
+      - "jit=off"                          # OLTP: JIT compilation is a net loss
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    shm_size: "1gb"                        # parallel workers use /dev/shm
+    stop_grace_period: 30s                 # let Postgres checkpoint on shutdown
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchard} -d ${POSTGRES_DB:-orchard} -q"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "6.0"
+        reservations:
+          memory: 1G
+    <<: *logging
+
+  chromadb:
+    image: chromadb/chroma:latest        # Chroma 1.x -> /api/v2/*; persists to /data.
+    restart: unless-stopped               # Pin a digest/tag for real reproducibility.
+    networks: [orchard-net]
+    ports:
+      # host 8001 (8000 is the bare-metal uvicorn's port); container stays 8000,
+      # which is what the backend service and the internal healthcheck use.
+      - "127.0.0.1:8001:8000"
+    environment:
+      ANONYMIZED_TELEMETRY: "FALSE"
+      ALLOW_RESET: "FALSE"                 # block DELETE /reset — no accidental purges
+      # no CHROMA_SERVER_AUTHN_* : unauthenticated by design
+    volumes:
+      - chroma_data:/data                  # `chroma run` config.yaml -> persist_path: /data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # spec asks for `curl`; this image ships neither curl nor python, but has
+      # bash - do a minimal HTTP/1.0 GET against the v2 heartbeat via /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8000; printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\n\\r\\n' >&3; head -1 <&3 | grep -q ' 200'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "6.0"
+        reservations:
+          memory: 512M
+    <<: *logging
+
+  # --- application services -------------------------------------------------
+  # `./dev.ps1` and `pytest` skip these two and run the app bare-metal against
+  # the postgres/chromadb containers above; `docker compose up` runs everything.
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    networks: [orchard-net]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432          # in-network port (host publishes 5433)
+      POSTGRES_USER: ${POSTGRES_USER:-orchard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchard}
+      POSTGRES_DB: ${POSTGRES_DB:-orchard}
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000          # in-network port (host publishes 8001)
+      ORCHARD_UPLOADS_DIR: /app/uploads
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+    volumes:
+      - uploads_data:/app/uploads
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    healthcheck:
+      # python-slim: no curl. Hit the app's own /health.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status==200 else sys.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "4.0"
+    <<: *logging
+
+  frontend:
+    build:
+      context: ../orchard-web
+      args:
+        # baked into next.config.ts's rewrites() at build time
+        FASTAPI_URL: http://backend:8000
+    restart: unless-stopped
+    networks: [orchard-net]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # read per-request by app/api/chat/route.ts + app/api/v1/sources/route.ts
+      FASTAPI_URL: http://backend:8000
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+    <<: *logging
