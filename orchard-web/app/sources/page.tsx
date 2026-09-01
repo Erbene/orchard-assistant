@@ -14,8 +14,17 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DetailsDialog } from "@/components/ui/details-dialog";
 import { DataTable } from "@/components/ui/data-table";
 import { useToast } from "@/components/ui/toast";
+import dynamic from "next/dynamic";
 import { SourceUploadForm } from "@/components/sources/source-upload-form";
 import { sourceColumns } from "@/components/sources/columns";
+
+// markdown renderer (~react-markdown + remark-gfm) — only needed when the
+// details dialog is open, so keep it out of the initial page bundle.
+const SourceContent = dynamic(
+  () =>
+    import("@/components/sources/source-content").then((m) => m.SourceContent),
+  { loading: () => <p className="text-sm text-muted-foreground">Loading…</p> },
+);
 import { ApiError, sourcesApi } from "@/lib/api";
 import type { Source, SourceDetail } from "@/lib/types";
 
@@ -167,25 +176,23 @@ export default function SourcesPage() {
       <DetailsDialog
         open={viewing !== null}
         onOpenChange={(o) => !o && setViewing(null)}
-        title={viewing ? `Source #${viewing.id}` : ""}
+        title={viewing ? viewing.name : ""}
+        description={viewing ? `Source #${viewing.id}` : undefined}
+        className="sm:max-w-3xl"
         fields={
           viewing
             ? [
-                ["Name", viewing.name],
                 ["Type", viewing.source_type],
-                ["File", viewing.file_path],
-                ["Uploaded", viewing.upload_date.slice(0, 19).replace("T", " ")],
                 [
-                  "Content",
-                  <pre
-                    key="c"
-                    className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted p-2 text-xs"
-                  >
-                    {viewing.raw_content}
-                  </pre>,
+                  "Uploaded",
+                  viewing.upload_date.slice(0, 19).replace("T", " "),
                 ],
+                ["File", viewing.file_path],
               ]
             : []
+        }
+        content={
+          viewing ? <SourceContent markdown={viewing.raw_content} /> : null
         }
       />
 

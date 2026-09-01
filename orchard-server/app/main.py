@@ -15,14 +15,20 @@ from fastapi import FastAPI
 from .api import api_router
 from .api.errors import register_exception_handlers
 from .config import get_settings
+from .core.logging import configure_logging, get_logger
+from .core.middleware import RequestContextMiddleware
 from .dependencies import _ensure_schema
 from .mcp_server import mcp
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
+    configure_logging(get_settings())          # dual-mode structlog pipeline
+    log = get_logger("app")
+    log.info("app.startup", version=app.version)
     _ensure_schema(get_settings())
     yield
+    log.info("app.shutdown")
 
 
 app = FastAPI(
@@ -32,13 +38,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Outermost app middleware: correlation id + per-request logging + timing.
+app.add_middleware(RequestContextMiddleware)
+
 register_exception_handlers(app)
 # Versioned API namespace: /api/v1/zones, /api/v1/trees, /api/v1/chat
 app.include_router(api_router, prefix="/api/v1")
 
-# MCP server over SSE for web-based AI clients. The mounted sub-app exposes
-# GET /mcp/sse (event stream) and POST /mcp/messages/ (client -> server).
-# Stdio transport for desktop clients lives in app/mcp_server.py's __main__.
+# MCP server over SSE for web-based AI clients (GET /mcp/sse, POST /mcp/messages/).
 app.mount("/mcp", mcp.sse_app())
 
 

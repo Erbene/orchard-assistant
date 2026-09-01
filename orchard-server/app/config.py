@@ -32,6 +32,16 @@ class Settings:
     uploads_dir: str = field(
         default_factory=lambda: os.environ.get("ORCHARD_UPLOADS_DIR", str(_ROOT / "uploads"))
     )
+    # Observability (see app/core/logging.py)
+    log_level: str = field(
+        default_factory=lambda: os.environ.get("LOG_LEVEL", "DEBUG")
+    )
+    environment: str = field(
+        default_factory=lambda: os.environ.get("ENVIRONMENT", "development")
+    )
+    log_format: str = field(
+        default_factory=lambda: os.environ.get("LOG_FORMAT", "")  # "console" | "json" | ""
+    )
 
 
 @lru_cache
