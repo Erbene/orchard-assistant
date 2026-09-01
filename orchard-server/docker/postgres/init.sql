@@ -80,11 +80,16 @@ CREATE TABLE IF NOT EXISTS sources (
 );
 
 CREATE TABLE IF NOT EXISTS tree_sources (
-    tree_id    BIGINT NOT NULL REFERENCES tree(tree_id) ON DELETE CASCADE,
-    source_id  BIGINT NOT NULL REFERENCES sources(id)  ON DELETE CASCADE,
+    tree_id         BIGINT NOT NULL REFERENCES tree(tree_id) ON DELETE CASCADE,
+    source_id       BIGINT NOT NULL REFERENCES sources(id)  ON DELETE CASCADE,
+    priority_order  INT NOT NULL DEFAULT 0,   -- authority rank; 0 = highest
     PRIMARY KEY (tree_id, source_id)
 );
+-- idempotent for volumes created before priority ordering existed
+ALTER TABLE tree_sources ADD COLUMN IF NOT EXISTS priority_order INT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_tree_sources_source ON tree_sources (source_id);
+CREATE INDEX IF NOT EXISTS idx_tree_sources_priority
+    ON tree_sources (tree_id, priority_order);
 
 -- Optional pgvector-native chunk store. The app currently keeps vectors in
 -- ChromaDB; this table is the drop-in alternative (all-MiniLM-L6-v2 = 384 dims).

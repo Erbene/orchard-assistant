@@ -76,27 +76,32 @@ class SourceRepository:
     # -- tree <-> source links -----------------------------------
 
     async def source_ids_for_tree(self, tree_id: int) -> list[int]:
+        """Linked source ids in authority order (``priority_order`` ascending)."""
         result = await self._conn.execute(
             text(
                 "SELECT source_id FROM tree_sources WHERE tree_id = :tree_id"
-                " ORDER BY source_id"
+                " ORDER BY priority_order ASC, source_id ASC"
             ),
             {"tree_id": tree_id},
         )
         return [r[0] for r in result.all()]
 
     async def sources_for_tree(self, tree_id: int) -> list[Row]:
+        """Linked sources in authority order (``priority_order`` ascending)."""
         result = await self._conn.execute(
             text(
                 "SELECT s.* FROM sources s"
                 " JOIN tree_sources ts ON ts.source_id = s.id"
-                " WHERE ts.tree_id = :tree_id ORDER BY s.id DESC"
+                " WHERE ts.tree_id = :tree_id"
+                " ORDER BY ts.priority_order ASC, s.id ASC"
             ),
             {"tree_id": tree_id},
         )
         return [dict(r) for r in result.mappings().all()]
 
     async def set_tree_links(self, tree_id: int, source_ids: list[int]) -> None:
+        """Replace a tree's links. List order is persisted as ``priority_order``
+        (index 0 = highest authority)."""
         await self._conn.execute(
             text("DELETE FROM tree_sources WHERE tree_id = :tree_id"), {"tree_id": tree_id}
         )
@@ -104,8 +109,11 @@ class SourceRepository:
         if unique_ids:
             await self._conn.execute(
                 text(
-                    "INSERT INTO tree_sources (tree_id, source_id)"
-                    " VALUES (:tree_id, :source_id)"
+                    "INSERT INTO tree_sources (tree_id, source_id, priority_order)"
+                    " VALUES (:tree_id, :source_id, :priority_order)"
                 ),
-                [{"tree_id": tree_id, "source_id": sid} for sid in unique_ids],
+                [
+                    {"tree_id": tree_id, "source_id": sid, "priority_order": i}
+                    for i, sid in enumerate(unique_ids)
+                ],
             )

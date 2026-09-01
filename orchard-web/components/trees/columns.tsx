@@ -1,7 +1,10 @@
 "use client";
 
+import Link from "next/link";
+import { Library } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { Tree, Zone } from "@/lib/types";
+import { Button } from "@/components/ui/button";
 import { RowActions, type RowActionHandlers } from "@/components/data-table/row-actions";
 import {
   Dash,
@@ -73,7 +76,21 @@ export function treeColumns(
       enableSorting: false,
       enableGlobalFilter: false,
       cell: ({ row }) => (
-        <div className="text-right">
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            title="Linked sources"
+          >
+            <Link
+              href={`/trees/${row.original.tree_id}`}
+              aria-label={`Linked sources for tree ${row.original.tree_id}`}
+            >
+              <Library className="size-4" />
+            </Link>
+          </Button>
           <RowActions
             row={row.original}
             actions={actions}

@@ -67,6 +67,23 @@ async def connection(settings: Settings) -> AsyncIterator[AsyncConnection]:
         yield conn
 
 
+# Additive, idempotent DDL applied on startup so an existing Postgres volume
+# picks up columns added after its init.sql first ran (there is no migration
+# tool; a full schema change still needs `docker compose down -v`). This is the
+# Postgres equivalent of the old sqlite `_backfill_columns`.
+_STARTUP_DDL: tuple[str, ...] = (
+    "ALTER TABLE tree_sources ADD COLUMN IF NOT EXISTS priority_order INT NOT NULL DEFAULT 0",
+    "CREATE INDEX IF NOT EXISTS idx_tree_sources_priority ON tree_sources (tree_id, priority_order)",
+)
+
+
+async def apply_startup_ddl(settings: Settings) -> None:
+    async with get_engine(settings).begin() as conn:
+        for stmt in _STARTUP_DDL:
+            await conn.execute(text(stmt))
+    _log.info("db.startup_ddl.applied", statements=len(_STARTUP_DDL))
+
+
 async def healthcheck(settings: Settings) -> bool:
     """``SELECT 1`` against the pool - for the app's ``/health`` endpoint."""
     try:

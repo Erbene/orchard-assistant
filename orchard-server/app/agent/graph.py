@@ -12,6 +12,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
+from .agronomist import AGRONOMIST_SYSTEM_PROMPT, format_priority_context
 from .state import AgentState
 
 _KNOWLEDGE_HINTS = ("why", "how", "what", "when", "disease", "pest", "deficien")
@@ -39,19 +40,27 @@ def orchestrator(state: AgentState) -> dict:
 
 
 async def agronomist_agent(state: AgentState) -> dict:
-    """Answer horticultural questions grounded in the knowledge base.
+    """Answer horticultural questions grounded in the knowledge base, respecting
+    the grower's source authority order.
 
-    Real version: an LLM bound to the ``search_knowledge`` MCP tool calls
-    ``search_knowledge(query=..., tree_id=state["active_tree_id"])``, does
-    consensus fusion over the per-source blocks, then drafts an answer.
+    Real version::
+
+        groups  = await svc.sources.search(query, source_ids=svc.sources
+                      .allowed_source_ids(state["active_tree_id"]))   # rank order
+        context = format_priority_context(groups)                     # [PRIORITY n ...]
+        answer  = await llm.ainvoke([
+            SystemMessage(AGRONOMIST_SYSTEM_PROMPT),
+            *state["messages"],
+            SystemMessage(f"Retrieved sources:\\n\\n{context}"),
+        ])   # conflicts resolved Priority 1 > Priority 2 per the system prompt
     """
-    # tools = await load_orchard_tools()
-    # answer = await llm.bind_tools(tools).ainvoke(state["messages"])
+    _ = (AGRONOMIST_SYSTEM_PROMPT, format_priority_context)  # wired; used by the real impl
     return {
         "messages": [
             AIMessage(
-                "[agronomist] (stub) would call search_knowledge and fuse "
-                "the per-source results here.",
+                "[agronomist] (stub) would call search_knowledge, render the "
+                "results as [PRIORITY n SOURCE ...] blocks, and resolve any "
+                "conflicts in favour of the higher-ranked source.",
                 name="agronomist",
             )
         ]

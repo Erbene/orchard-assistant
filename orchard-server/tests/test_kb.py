@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.agent.agronomist import format_priority_context
 from app.core import db
 from app.dependencies import get_settings_dep
 from app.main import app
@@ -109,8 +110,9 @@ def test_delete_source_clears_chunks(kb):
     kb(body)
 
 
-def test_consensus_fusion_groups_results_by_source(kb):
-    """Mirrors search_knowledge: independent per-source search + headers."""
+def test_consensus_fusion_ranks_by_authority_order(kb):
+    """search() groups come back in priority order with ascending rank, and
+    format_priority_context renders [PRIORITY n SOURCE ...] headers."""
     async def body(c: KB):
         tree = await c.trees.create_tree(TreeCreate(species="mango", variety="Kent"))
         tid = tree.tree_id
@@ -118,17 +120,37 @@ def test_consensus_fusion_groups_results_by_source(kb):
         s2 = await c.sources.ingest_text(
             "Guide B", "Mango anthracnose is managed with copper sprays."
         )
-        await c.sources.set_tree_sources(tid, [s1.id, s2.id])
+        # link B first (higher authority), then A
+        await c.sources.set_tree_sources(tid, [s2.id, s1.id])
+        scope = await c.sources.allowed_source_ids(tid)
+        assert scope == [s2.id, s1.id]
 
-        blocks = []
-        for sid in await c.sources.allowed_source_ids(tid):
-            chunks = c.store.search("mango pruning and disease", source_id=sid, n_results=2)
-            if chunks:
-                blocks.append(f"--- SOURCE {sid} ---\n" + "\n".join(f"- {ch}" for ch in chunks))
-        fused = "\n\n".join(blocks)
+        groups = await c.sources.search("mango pruning and disease", source_ids=scope)
+        assert [g["source_id"] for g in groups] == [s2.id, s1.id]
+        assert [g["rank"] for g in groups] == [1, 2]
 
-        assert f"--- SOURCE {s1.id} ---" in fused
-        assert f"--- SOURCE {s2.id} ---" in fused
+        rendered = format_priority_context(groups)
+        assert f"[PRIORITY 1 SOURCE: Guide B (ID: {s2.id})]" in rendered
+        assert f"[PRIORITY 2 SOURCE: Guide A (ID: {s1.id})]" in rendered
+        assert rendered.index("PRIORITY 1") < rendered.index("PRIORITY 2")
+
+    kb(body)
+
+
+def test_reordering_links_repersists_priority(kb):
+    async def body(c: KB):
+        tree = await c.trees.create_tree(TreeCreate(species="mango", variety="Kent"))
+        tid = tree.tree_id
+        a = await c.sources.ingest_text("A", "alpha")
+        b = await c.sources.ingest_text("B", "bravo")
+        cc = await c.sources.ingest_text("C", "charlie")
+
+        await c.sources.set_tree_sources(tid, [a.id, b.id, cc.id])
+        assert await c.sources.allowed_source_ids(tid) == [a.id, b.id, cc.id]
+        assert [s.id for s in await c.sources.sources_for_tree(tid)] == [a.id, b.id, cc.id]
+
+        await c.sources.set_tree_sources(tid, [cc.id, a.id, b.id])
+        assert await c.sources.allowed_source_ids(tid) == [cc.id, a.id, b.id]
 
     kb(body)
 

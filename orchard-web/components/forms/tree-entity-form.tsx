@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { LinkedSources } from "@/components/trees/linked-sources";
 import { ApiError, treesApi } from "@/lib/api";
 import type { Tree, TreeInput, Zone } from "@/lib/types";
 
@@ -210,9 +210,16 @@ export function TreeEntityForm({
       </Field>
 
       {isEdit && tree && (
-        <div className="border-t pt-4">
-          <LinkedSources treeId={tree.tree_id} />
-        </div>
+        <p className="border-t pt-4 text-sm text-muted-foreground">
+          Manage &amp; rank linked knowledge sources on the{" "}
+          <Link
+            href={`/trees/${tree.tree_id}`}
+            className="font-medium text-primary hover:underline"
+          >
+            tree page
+          </Link>
+          .
+        </p>
       )}
 
       {formError && (

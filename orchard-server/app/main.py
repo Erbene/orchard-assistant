@@ -26,6 +26,10 @@ async def lifespan(app: FastAPI):
     configure_logging(get_settings())          # dual-mode structlog pipeline
     log = get_logger("app")
     log.info("app.startup", version=app.version)
+    try:
+        await db.apply_startup_ddl(get_settings())   # additive, idempotent
+    except Exception:  # noqa: BLE001 - don't crash the app if the DB is down
+        log.warning("app.startup_ddl.failed", exc_info=True)
     yield
     await db.dispose_all()
     log.info("app.shutdown")

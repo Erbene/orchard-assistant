@@ -139,7 +139,7 @@ async def _exercise() -> None:
             fused = _payload(await session.call_tool("search_knowledge", {
                 "query": "how many limbs when pruning a young mango",
             }))
-            assert f"--- SOURCE {src['id']}: Mango notes ---" in fused
+            assert f"[PRIORITY 1 SOURCE: Mango notes (ID: {src['id']})]" in fused
             assert "scaffold" in fused
 
             # tree-scoped still works once linked
@@ -149,7 +149,7 @@ async def _exercise() -> None:
             scoped = _payload(await session.call_tool("search_knowledge", {
                 "query": "pruning", "tree_id": tree_id,
             }))
-            assert f"--- SOURCE {src['id']}" in scoped
+            assert f"[PRIORITY 1 SOURCE: Mango notes (ID: {src['id']})]" in scoped
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text

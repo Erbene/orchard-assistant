@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TypedDict
 
 from ..config import Settings
 from ..core.logging import get_logger
@@ -20,6 +21,20 @@ from .exceptions import DomainValidationError, NotFoundError
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _log = get_logger("app.rag")
+
+
+class FusedSource(TypedDict):
+    """One source's contribution to a consensus-fusion result.
+
+    ``rank`` is 1-based: for a tree-scoped search it is the authority rank
+    (``tree_sources.priority_order`` + 1); for a whole-KB search it is the
+    relevance position.
+    """
+
+    source_id: int
+    name: str
+    rank: int
+    chunks: list[str]
 
 
 class SourceService:
@@ -127,12 +142,14 @@ class SourceService:
 
     async def search(
         self, query: str, *, source_ids: list[int] | None = None, per_source: int = 4
-    ) -> list[dict[str, object]]:
+    ) -> list[FusedSource]:
         """Consensus-fusion retrieval.
 
-        ``source_ids=None`` searches the entire knowledge base; otherwise only
-        the given sources. Results are grouped by source:
-        ``[{"source_id", "name", "chunks": [...]}, ...]`` ordered by relevance.
+        ``source_ids=None`` searches the entire knowledge base (groups ordered
+        by relevance); otherwise only the given sources, **in the order given**
+        - which for a tree scope is authority order (``priority_order``). Each
+        group carries a 1-based ``rank``:
+        ``[{"source_id", "name", "rank", "chunks": [...]}, ...]``.
         """
         if source_ids is not None and not source_ids:
             return []
@@ -162,8 +179,13 @@ class SourceService:
             chunks=sum(len(c) for c in grouped.values()),
         )
         return [
-            {"source_id": sid, "name": names.get(sid, f"source {sid}"), "chunks": chunks}
-            for sid, chunks in grouped.items()
+            FusedSource(
+                source_id=sid,
+                name=names.get(sid, f"source {sid}"),
+                rank=rank,
+                chunks=chunks,
+            )
+            for rank, (sid, chunks) in enumerate(grouped.items(), start=1)
         ]
 
     # -- helpers ----------------------------------------------

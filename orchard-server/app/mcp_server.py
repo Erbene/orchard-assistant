@@ -25,6 +25,7 @@ from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 
+from .agent.agronomist import format_priority_context
 from .config import get_settings
 from .core import db
 from .rag.vector_store import get_vector_store
@@ -594,11 +595,13 @@ async def search_knowledge(query: str, tree_id: int | None = None) -> str:
             are searched (via ``link_tree_sources``). Omit to search **every**
             ingested source — the normal case.
 
-    Consensus-fusion retrieval: results are grouped per source so the model can
-    weigh agreement / disagreement itself. Each hit contributes a block:
-    ``--- SOURCE {id}: {name} ---`` followed by the matching chunks. Returns a
-    short notice if nothing was ingested / matched. Cite the source id(s) in
-    your answer.
+    Consensus-fusion retrieval: results are grouped per source and ranked by
+    the grower's authority order (for a tree scope) or by relevance (whole KB).
+    Each hit contributes a block:
+    ``[PRIORITY {n} SOURCE: {name} (ID: {id})]`` followed by the matching
+    chunks. When sources conflict, prefer the lower priority number
+    (Priority 1 > Priority 2). Returns a short notice if nothing was ingested /
+    matched. Cite the source id(s) in your answer.
     """
     async with _session() as svc:
         scope: list[int] | None = None
@@ -619,11 +622,7 @@ async def search_knowledge(query: str, tree_id: int | None = None) -> str:
         where = "the knowledge base" if scope is None else f"tree {tree_id}'s sources"
         return f"No relevant passages found in {where}."
 
-    return "\n\n".join(
-        f"--- SOURCE {g['source_id']}: {g['name']} ---\n"
-        + "\n".join(f"- {c.strip()}" for c in g["chunks"])
-        for g in groups
-    )
+    return format_priority_context(groups)
 
 
 @mcp.prompt(title="Ask the knowledge base")

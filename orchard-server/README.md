@@ -118,8 +118,10 @@ conversation by the agent, not stored.
 
 **Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
 applied once when the `postgres` container's volume is first created (and by
-`tests/conftest.py` against the disposable `orchard_test` database). To pick
-up schema changes, `docker compose down -v` and back up.
+`tests/conftest.py` against the disposable `orchard_test` database). Additive
+columns are also re-applied idempotently on app startup (`db.apply_startup_ddl`,
+the `_STARTUP_DDL` list). A structural change still needs `docker compose
+down -v` and back up.
 
 ### Knowledge base (Consensus Fusion RAG)
 
