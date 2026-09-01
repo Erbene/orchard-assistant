@@ -87,6 +87,9 @@ async def foreman_agent(state: AgentState) -> dict:
                          minutes=state["available_minutes"],
                          resources=state["confirmed_resources"])      # fit
         await call_tool(tools, "batch_update_task_priorities", plan)  # commit
+        # for an irrigation item due now, execute it directly on the hardware:
+        await call_tool(tools, "trigger_rachio_watering",
+                        {"zone_id": zone_id, "duration_minutes": minutes})
     """
     if state.get("available_minutes") is None:
         return {

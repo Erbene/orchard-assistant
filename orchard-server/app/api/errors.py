@@ -11,12 +11,16 @@ from ..services.exceptions import (
     ConflictError,
     DomainValidationError,
     NotFoundError,
+    RachioError,
+    RachioNotConfigured,
 )
 
 _STATUS = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     DomainValidationError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    RachioNotConfigured: status.HTTP_503_SERVICE_UNAVAILABLE,
+    RachioError: status.HTTP_502_BAD_GATEWAY,
 }
 
 
@@ -24,6 +28,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(NotFoundError)
     @app.exception_handler(ConflictError)
     @app.exception_handler(DomainValidationError)
+    @app.exception_handler(RachioNotConfigured)
+    @app.exception_handler(RachioError)
     async def _handle(_: Request, exc: Exception) -> JSONResponse:
         code = _STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
         body: dict[str, object] = {"detail": str(exc)}

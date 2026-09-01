@@ -148,6 +148,10 @@ services:
       CHROMA_PORT: 8000          # in-network port (host publishes 8001)
       ORCHARD_UPLOADS_DIR: /app/uploads
       ENVIRONMENT: production
+      # Rachio: from .env (compose reads orchard-server/.env for ${...}).
+      # Optional - empty => the /zones endpoints + tools return 503.
+      RACHIO_API_KEY: ${RACHIO_API_KEY:-}
+      RACHIO_BASE_URL: ${RACHIO_BASE_URL:-https://api.rach.io/1/public}
       LOG_FORMAT: json
     volumes:
       - uploads_data:/app/uploads

@@ -26,3 +26,18 @@ class DomainValidationError(DomainError):
         self.field = field
         self.message = message
         super().__init__(f"{field}: {message}")
+
+
+class RachioNotConfigured(DomainError):
+    """A Rachio call was attempted but ``RACHIO_API_KEY`` is not set."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message
+            or "Rachio integration is not configured. Set RACHIO_API_KEY to "
+            "connect your irrigation controller."
+        )
+
+
+class RachioError(DomainError):
+    """The Rachio API returned an error or was unreachable."""

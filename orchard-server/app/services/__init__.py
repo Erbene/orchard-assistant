@@ -1,9 +1,16 @@
 from .chat_service import ChatService
-from .exceptions import ConflictError, DomainError, DomainValidationError, NotFoundError
+from .exceptions import (
+    ConflictError,
+    DomainError,
+    DomainValidationError,
+    NotFoundError,
+    RachioError,
+    RachioNotConfigured,
+)
+from .rachio import RachioService
 from .source_service import SourceService
 from .task_service import TaskService
 from .tree_service import TreeService
-from .zone_service import ZoneService
 
 __all__ = [
     "ChatService",
@@ -11,8 +18,10 @@ __all__ = [
     "DomainError",
     "DomainValidationError",
     "NotFoundError",
+    "RachioError",
+    "RachioNotConfigured",
+    "RachioService",
     "SourceService",
     "TaskService",
     "TreeService",
-    "ZoneService",
 ]

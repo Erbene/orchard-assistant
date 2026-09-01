@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.core import db
 from app.repositories.task_repository import TaskRepository
 from app.repositories.tree_repository import TreeRepository
-from app.repositories.zone_repository import ZoneRepository
 from app.schemas.task import (
     TaskBaselineItem,
     TaskCreate,
@@ -53,9 +52,7 @@ def orchard(tmp_path: Path):
                     tree_repo = TreeRepository(conn)
                     ctx = Ctx(
                         tasks=TaskService(TaskRepository(conn), tree_repo),
-                        trees=TreeService(
-                            tree_repo, ZoneRepository(conn), get_default_validation_agent()
-                        ),
+                        trees=TreeService(tree_repo, get_default_validation_agent()),
                         conn=conn,
                     )
                     return await body(ctx)

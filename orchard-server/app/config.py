@@ -14,11 +14,53 @@ containers, distinguished only by ``postgres_db`` / ``chroma_collection``
 from __future__ import annotations
 
 import os
+import re
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path: Path) -> None:
+    """Populate ``os.environ`` from ``orchard-server/.env`` for bare-metal runs
+    (uvicorn, ``python -m app.mcp_server``, dev.ps1). Existing env vars always
+    win (docker compose / the shell). Uses ``python-dotenv`` when importable,
+    otherwise a minimal built-in parser so this never silently no-ops just
+    because the running interpreter lacks the package. The test suite sets
+    ``ORCHARD_SKIP_DOTENV=1`` to stay hermetic.
+    """
+    if os.environ.get("ORCHARD_SKIP_DOTENV") or not path.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(path, override=False)
+        return
+    except ImportError:
+        print(
+            f"[config] python-dotenv not installed for {sys.executable}; "
+            f"using the built-in .env parser",
+            file=sys.stderr,
+        )
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip().removeprefix("export ").strip()
+        if not key or key in os.environ:
+            continue
+        val = val.strip()
+        if val[:1] in {'"', "'"} and val[-1:] == val[:1]:
+            val = val[1:-1]
+        else:
+            val = re.split(r"\s+#", val, maxsplit=1)[0].strip()
+        os.environ[key] = val
+
+
+_load_dotenv(_ROOT / ".env")
 
 
 def _bool(name: str, *, default: bool) -> bool:
@@ -78,6 +120,17 @@ class Settings:
     )
     db_echo: bool = field(default_factory=lambda: _bool("DB_ECHO", default=False))
 
+    # Rachio Smart Irrigation API (app/services/rachio.py) - optional; zone
+    # endpoints/tools return 503 when the key is unset.
+    rachio_api_key: str = field(
+        default_factory=lambda: os.environ.get("RACHIO_API_KEY", "")
+    )
+    rachio_base_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "RACHIO_BASE_URL", "https://api.rach.io/1/public"
+        )
+    )
+
     # ChromaDB HTTP server (docker-compose "chromadb" service - app/core/vector_db.py)
     chroma_host: str = field(
         default_factory=lambda: os.environ.get("CHROMA_HOST", "localhost")
@@ -90,6 +143,10 @@ class Settings:
     chroma_collection: str = field(
         default_factory=lambda: os.environ.get("CHROMA_COLLECTION", "orchard_knowledge")
     )
+
+    @property
+    def rachio_enabled(self) -> bool:
+        return bool(self.rachio_api_key)
 
     def sqlalchemy_dsn(self) -> str:
         """asyncpg DSN. ``DATABASE_URL`` wins if set, else assembled from parts."""

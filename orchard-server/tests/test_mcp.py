@@ -19,9 +19,7 @@ SERVER_ROOT = Path(__file__).resolve().parent.parent
 EXPECTED_TOOLS = {
     "list_zones",
     "get_zone_details",
-    "create_zone",
-    "update_zone",
-    "delete_zone",
+    "trigger_rachio_watering",
     "list_trees",
     "get_tree_details",
     "create_tree",
@@ -37,6 +35,7 @@ EXPECTED_TOOLS = {
     "link_tree_sources",
     "search_knowledge",
 }
+REMOVED_TOOLS = {"create_zone", "update_zone", "delete_zone"}
 
 
 def _payload(result: Any) -> Any:
@@ -64,6 +63,7 @@ async def _exercise() -> None:
         env={
             "POSTGRES_DB": "orchard_test",
             "CHROMA_COLLECTION": "orchard_knowledge_test",
+            "ORCHARD_SKIP_DOTENV": "1",   # hermetic; Rachio stays "not configured"
             "PYTHONPATH": str(SERVER_ROOT),
         },
     )
@@ -74,14 +74,14 @@ async def _exercise() -> None:
 
             tools = {t.name for t in (await session.list_tools()).tools}
             assert EXPECTED_TOOLS <= tools, tools
+            assert REMOVED_TOOLS.isdisjoint(tools), tools   # zone config is read-only
 
-            zone = await session.call_tool(
-                "create_zone",
-                {"name": "North Block", "soil_drainage": "sandy", "water_source": "well"},
-            )
-            assert not zone.isError, zone.content
-            zone_id = _payload(zone)["zone_id"]
+            # Rachio is not configured in the subprocess -> a clean tool error
+            zones = await session.call_tool("list_zones", {})
+            assert zones.isError
+            assert "not configured" in _payload(zones).lower()
 
+            zone_id = "rz-abc-123"   # a free-text Rachio zone id
             created = await session.call_tool(
                 "create_tree",
                 {"species": "mango", "variety": "Kent", "zone_id": zone_id},
@@ -153,10 +153,10 @@ async def _exercise() -> None:
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text
-            assert "Zones:            1" in body
             assert "Trees:            1" in body
             assert "Tasks (total):    2" in body
             assert "KB sources:       1" in body  # the one added above
+            assert "Rachio:           not configured" in body
             assert "mango: 1" in body
 
             missing = await session.call_tool(

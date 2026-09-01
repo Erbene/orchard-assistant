@@ -25,7 +25,7 @@ class TreeRepository:
         self._conn = conn
 
     async def list(
-        self, *, species: str | None = None, zone_id: int | None = None
+        self, *, species: str | None = None, zone_id: str | None = None
     ) -> list[Row]:
         clauses: list[str] = []
         params: dict[str, Any] = {}

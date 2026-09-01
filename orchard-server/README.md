@@ -1,11 +1,19 @@
 # Orchard Assistant API
 
-FastAPI service for orchard **zones**, **trees** and **tasks**, built as a
-clean layered architecture. No ORM — DDL lives in `docker/postgres/init.sql`,
-repositories issue raw SQL (`sqlalchemy.text`) over an async **PostgreSQL +
-pgvector** connection and return `dict` rows, and "models" are the Pydantic
-schemas in `schemas/`. The vector store is a **ChromaDB HTTP server**. Both
-run as containers (`docker-compose.yml`) — there is no SQLite / embedded mode.
+FastAPI service for orchard **trees**, **tasks** and a **knowledge base**,
+built as a clean layered architecture. No ORM — DDL lives in
+`docker/postgres/init.sql`, repositories issue raw SQL (`sqlalchemy.text`)
+over an async **PostgreSQL + pgvector** connection and return `dict` rows, and
+"models" are the Pydantic schemas in `schemas/`. The vector store is a
+**ChromaDB HTTP server**. Both run as containers (`docker-compose.yml`) —
+there is no SQLite / embedded mode.
+
+**Irrigation zones are not stored here.** They are the grower's real
+**Rachio** zones, read live and **read-only** through the Rachio Public API
+([app/services/rachio.py](app/services/rachio.py)) — all zone configuration is
+edited in the official Rachio app. The one write we perform is starting a
+manual watering run. `tree.zone_id` is just a free-text reference to a Rachio
+zone id.
 
 ## Layers
 
@@ -18,7 +26,7 @@ app/
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
   mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
   rag/               chunking, file text extraction, ChromaDB wrapper
-  agent/             LangGraph orchestration skeleton (state / graph / MCP client)
+  agent/             LangGraph orchestration skeleton (state / graph / agronomist)
 docker/postgres/init.sql   the schema (extensions + DDL), run on first container boot
 scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
@@ -29,15 +37,16 @@ scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
     zone.py  tree.py  task.py  source.py  chat.py
 
   services/          BUSINESS LOGIC - HTTP-agnostic, returns Pydantic/plain objects
-    zone_service.py  tree_service.py  task_service.py  source_service.py  chat_service.py
+    rachio.py  tree_service.py  task_service.py  source_service.py  chat_service.py
     validators.py  exceptions.py
 
-  repositories/      PERSISTENCE - raw SQL only, dict rows in/out
-    zone_repository.py  tree_repository.py  task_repository.py  source_repository.py
+  repositories/      PERSISTENCE - raw SQL only, dict rows in/out (no zone repo - Rachio)
+    tree_repository.py  task_repository.py  source_repository.py
 ```
 
 **Dependency flow (per request):**
-`get_settings_dep -> get_connection -> {get_zone_repository, get_tree_repository} + get_validation_agent -> {get_zone_service, get_tree_service} -> route handler`
+`get_settings_dep -> get_connection -> get_*_repository + get_validation_agent -> get_*_service -> route handler`
+(zone routes bypass the DB: `get_settings_dep -> get_rachio_service_dep`)
 
 FastAPI caches sub-dependencies per request, so one `AsyncConnection` is
 shared by every repository in a request and the request behaves as a single
@@ -45,15 +54,15 @@ transaction (commit on success, rollback on exception).
 
 ## Free text, no enums
 
-Descriptive fields (`species`, `variety`, `soil_drainage`, `water_source`) are plain
-`str` and are **stored exactly as typed** - no enums, no closed vocabularies,
-never rejected for being "unrecognized". Before a write, the **service** still
-awaits the **validation agent** hook
+Descriptive fields (`species`, `variety`) are plain `str` and are **stored
+exactly as typed** - no enums, no closed vocabularies, never rejected for
+being "unrecognized". Before a write, the **service** still awaits the
+**validation agent** hook
 ([app/services/validators.py](app/services/validators.py)):
 
 ```python
-outcome = await self._validator.validate("soil_drainage", "  fast ")
-# -> ValidationOutcome(canonical="fast", is_valid=True)   # whitespace trimmed only
+outcome = await self._validator.validate("species", "  Mango ")
+# -> ValidationOutcome(canonical="Mango", is_valid=True)   # whitespace trimmed only
 ```
 
 - `PassthroughValidationAgent` (default): collapses whitespace, accepts
@@ -63,11 +72,7 @@ outcome = await self._validator.validate("soil_drainage", "  fast ")
   passthrough.
 
 Swap implementations in `get_default_validation_agent()` - no service changes.
-The only 422 the write path still raises is the tree → zone referential check
-(`zone_id` must exist).
-
-`zone_id` is an auto-incrementing integer assigned by the database; `POST
-/api/v1/zones` takes `{ name, soil_drainage?, water_source? }` with no id.
+`tree.zone_id` is a free-text Rachio zone id - never validated.
 
 ## MCP / agent reuse
 
@@ -83,11 +88,14 @@ All API routes are mounted under **`/api/v1`** (`GET /health` is not). The
 
 | Method | Path | Notes |
 | ------ | ---- | ----- |
-| `GET`    | `/api/v1/zones`, `/api/v1/trees` | list; `/trees` accepts `?species=` / `?zone_id=` |
-| `GET`    | `/api/v1/zones/{id}`, `/api/v1/trees/{id}` | 404 if missing |
-| `POST`   | `/api/v1/zones`, `/api/v1/trees` | 201; `zone_id`/`tree_id` auto-assigned; 422 only if a tree names a non-existent `zone_id` |
-| `PATCH`  | `/api/v1/zones/{id}`, `/api/v1/trees/{id}` | partial; only supplied fields change |
-| `DELETE` | `/api/v1/zones/{id}`, `/api/v1/trees/{id}` | 204; 409 deleting a zone a tree still references |
+| `GET`    | `/api/v1/zones` | Rachio zones grouped by device (read-only); `503` if `RACHIO_API_KEY` unset |
+| `GET`    | `/api/v1/zones/{zone_id}` | one Rachio zone's config; `404` if unknown |
+| `POST`   | `/api/v1/zones/{zone_id}/water` | `{ duration_minutes }` → start a manual run; `202`. **No** create/update/delete — zone config is Rachio-app-only |
+| `GET`    | `/api/v1/trees` | list; accepts `?species=` / `?zone_id=` (zone_id is free text) |
+| `GET`    | `/api/v1/trees/{id}` | 404 if missing |
+| `POST`   | `/api/v1/trees` | 201; `tree_id` auto-assigned |
+| `PATCH`  | `/api/v1/trees/{id}` | partial; only supplied fields change |
+| `DELETE` | `/api/v1/trees/{id}` | 204 |
 | `GET/POST` | `/api/v1/sources` | KB sources; `POST` is `multipart/form-data` (`name` + `text` OR `file`) |
 | `GET` | `/api/v1/sources/{id}` | includes `raw_content` |
 | `PATCH/DELETE` | `/api/v1/sources/{id}` | rename (`{name}`) / delete (also purges Chroma chunks) |
@@ -167,14 +175,16 @@ is meant to stay.
 
 ## MCP server
 
-[app/mcp_server.py](app/mcp_server.py) exposes the same `ZoneService` /
-`TreeService` logic as MCP tools + a resource, for AI-agent clients. It reuses
-the service layer directly (one short-lived Postgres connection per call from
-the same pooled engine the HTTP API uses, wrapped in a transaction) — no HTTP
-calls to self.
+[app/mcp_server.py](app/mcp_server.py) exposes the `TreeService` /
+`TaskService` / `SourceService` / `RachioService` logic as MCP tools + a
+resource, for AI-agent clients. DB-backed tools reuse the service layer
+directly (one short-lived Postgres connection per call from the same pooled
+engine the HTTP API uses, wrapped in a transaction) — no HTTP calls to self.
 
 **Tools:**
-- zones — `list_zones`, `get_zone_details`, `create_zone`, `update_zone`, `delete_zone`
+- zones (Rachio, read-only) — `list_zones`, `get_zone_details`,
+  **`trigger_rachio_watering(zone_id, duration_minutes)`** (the Foreman's JIT
+  irrigation action; the only Rachio write). No create/update/delete.
 - trees — `list_trees`, `get_tree_details`, `create_tree`, `update_tree`, `delete_tree`
 - tasks (Foreman) — `get_pending_tasks`, `get_task_details`, `create_task`,
   `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`, `defer_task`
@@ -186,7 +196,8 @@ calls to self.
   (whole KB by default, or one tree's linked sources)
 
 **Prompt:** `ask_sources(question)` — canned "answer strictly from my ingested sources".
-**Resource:** `orchard://system-summary` — zone/tree/task/source counts + status.
+**Resource:** `orchard://system-summary` — tree/task/source counts, whether
+Rachio is configured, + status.
 
 Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as
 `ToolError`, so the client sees a clean message, not a stack trace.
@@ -216,8 +227,15 @@ backend `8000`, frontend `3000`. `Settings` defaults and `.env.example` match.
 
 ```sh
 cd orchard-server
-cp .env.example .env        # set POSTGRES_PASSWORD
+cp .env.example .env        # set POSTGRES_PASSWORD; optionally RACHIO_API_KEY
 ```
+
+`RACHIO_API_KEY` (from app.rach.io → Account) is **optional** — without it the
+`/api/v1/zones` endpoints and the `list_zones` / `trigger_rachio_watering` MCP
+tools return `503` / a tool error and everything else works normally.
+`app/config.py` loads `orchard-server/.env` on bare-metal runs (uvicorn, `python
+-m app.mcp_server`, `dev.ps1`); `docker compose` reads the same file for
+`${RACHIO_API_KEY}`. Real env vars always win over `.env`.
 
 **Full stack in Docker** — Postgres, Chroma, backend, frontend:
 

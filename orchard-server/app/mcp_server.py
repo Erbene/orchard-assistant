@@ -1,9 +1,9 @@
 """Model Context Protocol server for the orchard backend.
 
-Exposes the same domain logic the REST API uses (``ZoneService`` /
-``TreeService`` / ``TaskService`` / ``SourceService``) as MCP tools + a
-resource, so AI agents can read and mutate orchard data without going through
-HTTP.
+Exposes the same domain logic the REST API uses (``TreeService`` /
+``TaskService`` / ``SourceService`` for the local DB; ``RachioService`` for
+read-only irrigation zones) as MCP tools + a resource, so AI agents can read
+and mutate orchard data without going through HTTP.
 
 Two transports:
 
@@ -32,23 +32,20 @@ from .rag.vector_store import get_vector_store
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
-from .repositories.zone_repository import ZoneRepository
 from .schemas.task import TaskBaselineItem, TaskCreate, TaskPriorityUpdate
 from .schemas.tree import TreeCreate, TreeUpdate
-from .schemas.zone import ZoneCreate, ZoneUpdate
 from .services.exceptions import DomainError
+from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
 from .services.validators import get_default_validation_agent
-from .services.zone_service import ZoneService
 
 mcp = FastMCP("Orchard Management Server")
 
 
 @dataclass
 class _Services:
-    zones: ZoneService
     trees: TreeService
     tasks: TaskService
     sources: SourceService
@@ -61,13 +58,11 @@ async def _session() -> AsyncIterator[_Services]:
     settings = get_settings()
     validator = get_default_validation_agent()
     async with db.connection(settings) as conn:
-        zone_repo = ZoneRepository(conn)
         tree_repo = TreeRepository(conn)
         task_repo = TaskRepository(conn)
         source_repo = SourceRepository(conn)
         yield _Services(
-            zones=ZoneService(zone_repo, validator),
-            trees=TreeService(tree_repo, zone_repo, validator),
+            trees=TreeService(tree_repo, validator),
             tasks=TaskService(task_repo, tree_repo),
             sources=SourceService(
                 source_repo, tree_repo, get_vector_store(settings), settings
@@ -75,120 +70,77 @@ async def _session() -> AsyncIterator[_Services]:
         )
 
 
+def _rachio() -> RachioService:
+    """The process-wide Rachio client (not DB-bound - lives outside _session)."""
+    return get_rachio_service(get_settings())
+
+
 # ---------------------------------------------------------------------------
-# Tools - zones
+# Tools - Rachio irrigation zones (READ-ONLY + one watering action)
 # ---------------------------------------------------------------------------
+# Zone/device configuration lives in the grower's Rachio account and is edited
+# ONLY in the official Rachio app. There is no create/update/delete tool.
 
 @mcp.tool()
 async def list_zones() -> list[dict]:
-    """List every orchard zone.
+    """List every irrigation zone from the grower's Rachio account, grouped by
+    device (controller).
 
-    Returns a list of zones, each with: ``zone_id`` (int), ``name``,
-    ``soil_drainage`` (free text or null) and ``water_source`` (free text or
-    null).
+    Returns a list of devices, each ``{id, name, status, model, zones: [...]}``
+    where every zone has ``id`` (string), ``name``, ``enabled``,
+    ``zone_number`` and the ``custom_*`` config objects (nozzle, soil, slope,
+    crop/vegetation, shade/sun). **Read-only** - zone settings are changed in
+    the Rachio app, never here. Errors cleanly if Rachio is not configured.
     """
-    async with _session() as svc:
-        return [z.model_dump(mode="json") for z in await svc.zones.list_zones()]
+    try:
+        devices = await _rachio().get_devices_and_zones()
+    except DomainError as exc:
+        raise ToolError(str(exc)) from exc
+    return [d.model_dump(mode="json") for d in devices]
 
 
 @mcp.tool()
-async def get_zone_details(zone_id: int) -> dict:
-    """Fetch a single zone by its numeric id.
+async def get_zone_details(zone_id: str) -> dict:
+    """Fetch the full read-only configuration for one Rachio zone.
 
     Args:
-        zone_id: The zone's integer primary key.
+        zone_id: The Rachio zone id (a string/UUID, from ``list_zones``).
 
-    Errors if no zone with that id exists.
+    Returns ``{device_id, device_name, zone: {...}}``. Errors if the zone id
+    is unknown or Rachio is not configured.
     """
-    async with _session() as svc:
-        try:
-            return (await svc.zones.get_zone(zone_id)).model_dump(mode="json")
-        except DomainError as exc:
-            raise ToolError(str(exc)) from exc
-
-
-@mcp.tool()
-async def create_zone(
-    name: str,
-    soil_drainage: str | None = None,
-    water_source: str | None = None,
-) -> dict:
-    """Create a new orchard zone and return the created row (with its new id).
-
-    All descriptive fields are free text and stored exactly as typed - there
-    is no controlled vocabulary.
-
-    Args:
-        name: Human-readable zone name, e.g. "North Block".
-        soil_drainage: Optional free text, e.g. "sandy", "heavy clay".
-        water_source: Optional free text irrigation source, e.g. "well",
-            "canal", "municipal".
-    """
-    async with _session() as svc:
-        try:
-            created = await svc.zones.create_zone(
-                ZoneCreate(
-                    name=name,
-                    soil_drainage=soil_drainage,
-                    water_source=water_source,
-                )
-            )
-        except DomainError as exc:
-            raise ToolError(str(exc)) from exc
-        return created.model_dump(mode="json")
-
-
-@mcp.tool()
-async def update_zone(
-    zone_id: int,
-    name: str | None = None,
-    soil_drainage: str | None = None,
-    water_source: str | None = None,
-) -> dict:
-    """Update fields on an existing zone. Only the arguments you pass change.
-
-    Args:
-        zone_id: The zone to update.
-        name: New zone name.
-        soil_drainage: New free-text soil drainage.
-        water_source: New free-text water source.
-
-    Passing an argument as null/None leaves that field unchanged. Errors if
-    the zone does not exist.
-    """
-    patch = {
-        key: value
-        for key, value in {
-            "name": name,
-            "soil_drainage": soil_drainage,
-            "water_source": water_source,
-        }.items()
-        if value is not None
+    try:
+        device, zone = await _rachio().get_zone(zone_id)
+    except DomainError as exc:
+        raise ToolError(str(exc)) from exc
+    return {
+        "device_id": device.id,
+        "device_name": device.name,
+        "zone": zone.model_dump(mode="json"),
     }
-    async with _session() as svc:
-        try:
-            updated = await svc.zones.update_zone(zone_id, ZoneUpdate(**patch))
-        except DomainError as exc:
-            raise ToolError(str(exc)) from exc
-        return updated.model_dump(mode="json")
 
 
 @mcp.tool()
-async def delete_zone(zone_id: int) -> str:
-    """Permanently delete a zone.
+async def trigger_rachio_watering(zone_id: str, duration_minutes: int) -> str:
+    """Start a manual watering run on one Rachio zone. **This turns on real
+    irrigation hardware.**
+
+    This is the Foreman agent's JIT irrigation action: when a scheduling turn
+    calls for watering a zone now, call this with the zone id and how long to
+    run it. It is the only write this system performs against Rachio.
 
     Args:
-        zone_id: The zone to delete.
+        zone_id: The Rachio zone id (string, from ``list_zones``).
+        duration_minutes: Run length in minutes (clamped to Rachio's 1..180 range).
 
-    Returns a short confirmation string. Errors if the zone does not exist,
-    or if trees are still assigned to it (reassign or delete those first).
+    Returns a short confirmation. Errors if the zone/Rachio is unavailable.
     """
-    async with _session() as svc:
-        try:
-            await svc.zones.delete_zone(zone_id)
-        except DomainError as exc:
-            raise ToolError(str(exc)) from exc
-        return f"Zone {zone_id} deleted."
+    minutes = max(1, min(int(duration_minutes), 180))
+    try:
+        await _rachio().start_zone_watering(zone_id, minutes * 60)
+    except DomainError as exc:
+        raise ToolError(str(exc)) from exc
+    return f"Started watering Rachio zone {zone_id} for {minutes} minute(s)."
 
 
 # ---------------------------------------------------------------------------
@@ -196,12 +148,12 @@ async def delete_zone(zone_id: int) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def list_trees(zone_id: int | None = None) -> list[dict]:
-    """List tree records, optionally scoped to one zone.
+async def list_trees(zone_id: str | None = None) -> list[dict]:
+    """List tree records, optionally scoped to one Rachio zone id.
 
     Args:
-        zone_id: If provided, only trees assigned to this zone are returned;
-            otherwise every tree is returned.
+        zone_id: If provided (a Rachio zone id string), only trees bound to
+            that zone are returned; otherwise every tree is returned.
 
     Each tree includes ``tree_id``, ``species``, ``variety``, ``zone_id``,
     ``planted_date`` (ISO date or null) and the derived ``age_days`` /
@@ -232,21 +184,21 @@ async def get_tree_details(tree_id: int) -> dict:
 async def create_tree(
     species: str,
     variety: str,
-    zone_id: int | None = None,
+    zone_id: str | None = None,
     planted_date: str | None = None,
     notes: str | None = None,
 ) -> dict:
     """Create a new tree record and return the created row.
 
     All descriptive fields are free text and are stored exactly as typed -
-    there is no controlled vocabulary. (Soil drainage is a property of the
-    *zone*, not the tree; set it with the zone tools.)
+    there is no controlled vocabulary.
 
     Args:
         species: Common species name, e.g. "mango", "sapodilla", "sugar apple".
         variety: Cultivar / variety name, e.g. "Kent", "Nam Doc Mai".
-        zone_id: Optional id of an existing zone to plant the tree in. Must
-            reference a real zone or the call is rejected.
+        zone_id: Optional Rachio zone id (string) this tree is irrigated by.
+            Free text - not validated against Rachio. Use ``list_zones`` to
+            find ids.
         planted_date: Optional planting date as an ISO-8601 string (YYYY-MM-DD).
         notes: Optional free-text notes.
     """
@@ -271,7 +223,7 @@ async def update_tree(
     tree_id: int,
     species: str | None = None,
     variety: str | None = None,
-    zone_id: int | None = None,
+    zone_id: str | None = None,
     planted_date: str | None = None,
     notes: str | None = None,
     additional_context: str | None = None,
@@ -282,7 +234,7 @@ async def update_tree(
         tree_id: The tree to update.
         species: New free-text species name.
         variety: New free-text variety name.
-        zone_id: Move the tree to this (existing) zone.
+        zone_id: Bind the tree to this Rachio zone id (string; not validated).
         planted_date: New planting date, ISO-8601 (YYYY-MM-DD).
         notes: Replace the free-text notes.
         additional_context: Replace the free-text additional-context field.
@@ -644,12 +596,11 @@ def ask_sources(question: str) -> str:
 async def system_summary() -> str:
     """A plain-text snapshot of orchard database stats for grounding an agent.
 
-    Reports zone / tree / task counts, pending-task backlog, a per-species
-    tree tally, and overall system status.
+    Reports tree / task counts, pending-task backlog, a per-species tree
+    tally, whether Rachio is connected, and overall system status.
     """
     try:
         async with _session() as svc:
-            zone_rows = await svc.zones.list_zones()
             tree_rows = await svc.trees.list_trees()
             all_tasks = await svc.tasks.list_tasks()
             pending = await svc.tasks.get_pending_queue()
@@ -662,15 +613,16 @@ async def system_summary() -> str:
     for tree in tree_rows:
         species_tally[tree.species] = species_tally.get(tree.species, 0) + 1
 
+    rachio = "configured" if get_settings().rachio_enabled else "not configured"
     lines = [
         "Orchard Management System - summary",
         "-----------------------------------",
-        f"Zones:            {len(zone_rows)}",
         f"Trees:            {len(tree_rows)}",
-        f"Unassigned trees: {unassigned}",
+        f"Trees w/o zone:   {unassigned}",
         f"Tasks (total):    {len(all_tasks)}",
         f"Tasks (pending):  {len(pending)}",
         f"KB sources:       {len(source_rows)}",
+        f"Rachio:           {rachio}",
         "Status:           online",
     ]
     if species_tally:

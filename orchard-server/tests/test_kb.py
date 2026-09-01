@@ -20,7 +20,6 @@ from app.rag.chunking import chunk_text
 from app.rag.vector_store import OrchardVectorStore, get_vector_store
 from app.repositories.source_repository import SourceRepository
 from app.repositories.tree_repository import TreeRepository
-from app.repositories.zone_repository import ZoneRepository
 from app.schemas.tree import TreeCreate
 from app.services.source_service import SourceService
 from app.services.tree_service import TreeService
@@ -64,9 +63,7 @@ def kb(tmp_path: Path):
                         sources=SourceService(
                             SourceRepository(conn), tree_repo, store, settings
                         ),
-                        trees=TreeService(
-                            tree_repo, ZoneRepository(conn), get_default_validation_agent()
-                        ),
+                        trees=TreeService(tree_repo, get_default_validation_agent()),
                         store=store,
                         conn=conn,
                     )

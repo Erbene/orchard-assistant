@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Library } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import type { Tree, Zone } from "@/lib/types";
+import type { RachioZone, Tree } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { RowActions, type RowActionHandlers } from "@/components/data-table/row-actions";
 import {
@@ -14,12 +14,12 @@ import {
 } from "@/components/data-table/cells";
 
 export function treeColumns(
-  zones: Zone[],
+  zones: RachioZone[],
   actions: RowActionHandlers<Tree>,
 ): ColumnDef<Tree>[] {
-  const zoneLabel = (id: number | null) => {
-    if (id == null) return null;
-    return zones.find((z) => z.zone_id === id)?.name ?? `#${id}`;
+  const zoneLabel = (id: string | null) => {
+    if (!id) return null;
+    return zones.find((z) => z.id === id)?.name ?? id;
   };
 
   return [

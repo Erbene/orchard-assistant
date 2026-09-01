@@ -19,6 +19,7 @@ from .core import db
 from .core.logging import configure_logging, get_logger
 from .core.middleware import RequestContextMiddleware
 from .mcp_server import mcp
+from .services.rachio import get_rachio_service
 
 
 @asynccontextmanager
@@ -32,13 +33,17 @@ async def lifespan(app: FastAPI):
         log.warning("app.startup_ddl.failed", exc_info=True)
     yield
     await db.dispose_all()
+    try:
+        await get_rachio_service(get_settings()).aclose()
+    except Exception:  # noqa: BLE001
+        log.warning("app.rachio_close.failed", exc_info=True)
     log.info("app.shutdown")
 
 
 app = FastAPI(
     title="Orchard Assistant API",
     version="0.2.0",
-    summary="Layered CRUD (router -> service -> repository) for orchard zones and trees.",
+    summary="Layered service for orchard trees, tasks & knowledge base; irrigation zones read-only from Rachio.",
     lifespan=lifespan,
 )
 

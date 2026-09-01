@@ -14,7 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class TreeCreate(BaseModel):
     species: str = Field(min_length=1, description="Free text, e.g. 'mango'.")
     variety: str = Field(min_length=1, description="Free text, e.g. 'Kent'.")
-    zone_id: int | None = None
+    zone_id: str | None = Field(
+        default=None, description="Rachio zone id this tree is irrigated by (free text; not validated)."
+    )
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None
@@ -28,7 +30,7 @@ class TreeUpdate(BaseModel):
 
     species: str | None = Field(default=None, min_length=1)
     variety: str | None = Field(default=None, min_length=1)
-    zone_id: int | None = None
+    zone_id: str | None = None
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None
@@ -40,7 +42,7 @@ class TreeRead(BaseModel):
     tree_id: int
     species: str
     variety: str
-    zone_id: int | None = None
+    zone_id: str | None = None
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None

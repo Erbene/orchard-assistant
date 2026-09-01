@@ -1,21 +1,11 @@
 """FastAPI dependency wiring.
 
-The dependency graph:
-
-    get_settings_dep
-          |
-    get_connection ------------------------------.
-      |          |                               |
-    get_zone_repository        get_tree_repository
-      |     \\                    /       |
-      |      \\                  /        |
-    get_zone_service        get_tree_service
-                     \\        /
-                  get_validation_agent
-
 Because FastAPI caches sub-dependencies per request, ``get_connection`` yields
 one Postgres connection shared by every repository in that request - so a
 request is a single transaction (commit on success, rollback on error).
+
+Zones are not persisted locally - ``get_rachio_service_dep`` returns the
+process-wide ``RachioService`` (Rachio Public API, read-only).
 
 Tests override ``get_settings_dep`` to point at the disposable ``orchard_test``
 database / ``orchard_knowledge_test`` collection (see ``tests/conftest.py``);
@@ -34,13 +24,12 @@ from .rag.vector_store import OrchardVectorStore, get_vector_store
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
-from .repositories.zone_repository import ZoneRepository
 from .services.chat_service import ChatService
+from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
 from .services.validators import ValidationAgent, get_default_validation_agent
-from .services.zone_service import ZoneService
 
 
 def get_settings_dep() -> Settings:
@@ -55,10 +44,6 @@ async def get_connection(
 
 
 # -- repositories ------------------------------------------------------
-
-def get_zone_repository(conn: AsyncConnection = Depends(get_connection)) -> ZoneRepository:
-    return ZoneRepository(conn)
-
 
 def get_tree_repository(conn: AsyncConnection = Depends(get_connection)) -> TreeRepository:
     return TreeRepository(conn)
@@ -80,6 +65,14 @@ def get_vector_store_dep(
     return get_vector_store(settings)
 
 
+# -- Rachio irrigation API (process singleton per Settings) ----------
+
+def get_rachio_service_dep(
+    settings: Settings = Depends(get_settings_dep),
+) -> RachioService:
+    return get_rachio_service(settings)
+
+
 # -- validation agent -------------------------------------------------
 
 def get_validation_agent() -> ValidationAgent:
@@ -88,19 +81,11 @@ def get_validation_agent() -> ValidationAgent:
 
 # -- services ---------------------------------------------------------
 
-def get_zone_service(
-    repo: ZoneRepository = Depends(get_zone_repository),
-    validator: ValidationAgent = Depends(get_validation_agent),
-) -> ZoneService:
-    return ZoneService(repo, validator)
-
-
 def get_tree_service(
     trees: TreeRepository = Depends(get_tree_repository),
-    zones: ZoneRepository = Depends(get_zone_repository),
     validator: ValidationAgent = Depends(get_validation_agent),
 ) -> TreeService:
-    return TreeService(trees, zones, validator)
+    return TreeService(trees, validator)
 
 
 def get_task_service(

@@ -9,10 +9,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, treesApi } from "@/lib/api";
-import type { Tree, TreeInput, Zone } from "@/lib/types";
+import type { Tree, TreeInput } from "@/lib/types";
+
+export interface ZoneOption {
+  id: string;
+  label: string;
+}
 
 interface TreeEntityFormProps {
-  zones: Zone[];
+  /** Rachio zones flattened to selectable options ("{device} · {zone}"). */
+  zoneOptions: ZoneOption[];
   /** When provided the form edits this record; otherwise it creates a new one. */
   tree?: Tree | null;
   onSaved: (tree: Tree) => void;
@@ -42,7 +48,7 @@ function fromTree(tree: Tree): TreeInput {
 }
 
 export function TreeEntityForm({
-  zones,
+  zoneOptions,
   tree,
   onSaved,
   onCancel,
@@ -155,22 +161,28 @@ export function TreeEntityForm({
           />
         </Field>
 
-        <Field label="Zone" error={errors.zone_id} htmlFor="tree-zone">
+        <Field label="Irrigation zone" error={errors.zone_id} htmlFor="tree-zone">
           <select
             id="tree-zone"
             value={values.zone_id ?? ""}
-            onChange={(e) =>
-              set("zone_id", e.target.value ? Number(e.target.value) : null)
-            }
+            onChange={(e) => set("zone_id", e.target.value || null)}
             className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <option value="">— Unassigned —</option>
-            {zones.map((z) => (
-              <option key={z.zone_id} value={z.zone_id}>
-                {z.name} (#{z.zone_id})
+            <option value="">— none —</option>
+            {zoneOptions.map((z) => (
+              <option key={z.id} value={z.id}>
+                {z.label}
               </option>
             ))}
+            {/* keep an unknown/stale id selectable */}
+            {values.zone_id &&
+              !zoneOptions.some((z) => z.id === values.zone_id) && (
+                <option value={values.zone_id}>{values.zone_id} (not in Rachio)</option>
+              )}
           </select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Zones come from Rachio (read-only). Manage them in the Rachio app.
+          </p>
         </Field>
 
         <Field

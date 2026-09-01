@@ -16,7 +16,13 @@ The session fixture starts the containers if they aren't already running
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
+
+# Tests are hermetic: ignore any real orchard-server/.env, and Rachio is
+# always mocked / never really configured. Set BEFORE app.config imports.
+os.environ["ORCHARD_SKIP_DOTENV"] = "1"
+os.environ["RACHIO_API_KEY"] = ""
 
 import asyncpg
 import pytest
@@ -29,7 +35,7 @@ TEST_DB = "orchard_test"
 TEST_COLLECTION = "orchard_knowledge_test"
 
 _INIT_SQL = Path(__file__).resolve().parent.parent / "docker" / "postgres" / "init.sql"
-_TABLES = ("source_chunks", "tree_sources", "task", "sources", "tree", "zone")
+_TABLES = ("source_chunks", "tree_sources", "task", "sources", "tree")
 
 
 def stack_settings(**overrides) -> Settings:
@@ -53,10 +59,17 @@ async def _provision() -> None:
     finally:
         await admin.close()
 
-    # 2. apply the schema (idempotent - init.sql is all IF NOT EXISTS).
+    # 2. apply the schema (idempotent - init.sql is all IF NOT EXISTS), then
+    #    the additive/structural migrations the app applies on startup so an
+    #    orchard_test created by an older schema catches up (matches
+    #    db.apply_startup_ddl for the real DB).
+    from app.core.db import _STARTUP_DDL
+
     conn = await asyncpg.connect(_admin_dsn(TEST_DB))
     try:
         await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+        for stmt in _STARTUP_DDL:
+            await conn.execute(stmt)
     finally:
         await conn.close()
 
@@ -64,9 +77,17 @@ async def _provision() -> None:
 async def _truncate() -> None:
     conn = await asyncpg.connect(_admin_dsn(TEST_DB))
     try:
-        await conn.execute(
-            f"TRUNCATE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"
-        )
+        existing = {
+            r["tablename"]
+            for r in await conn.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            )
+        }
+        targets = [t for t in _TABLES if t in existing]
+        if targets:
+            await conn.execute(
+                f"TRUNCATE {', '.join(targets)} RESTART IDENTITY CASCADE"
+            )
     finally:
         await conn.close()
 

@@ -7,7 +7,6 @@ from datetime import date
 from sqlalchemy.exc import IntegrityError
 
 from ..repositories.tree_repository import TreeRepository
-from ..repositories.zone_repository import ZoneRepository
 from ..schemas.tree import TreeCreate, TreeRead, TreeUpdate
 from .exceptions import ConflictError, DomainValidationError, NotFoundError
 from .validators import ValidationAgent
@@ -28,18 +27,12 @@ def derive_age(planted_date: date | str | None) -> tuple[int | None, float | Non
 
 
 class TreeService:
-    def __init__(
-        self,
-        trees: TreeRepository,
-        zones: ZoneRepository,
-        validator: ValidationAgent,
-    ) -> None:
+    def __init__(self, trees: TreeRepository, validator: ValidationAgent) -> None:
         self._trees = trees
-        self._zones = zones
         self._validator = validator
 
     async def list_trees(
-        self, *, species: str | None = None, zone_id: int | None = None
+        self, *, species: str | None = None, zone_id: str | None = None
     ) -> list[TreeRead]:
         rows = await self._trees.list(species=species, zone_id=zone_id)
         return [self._to_read(r) for r in rows]
@@ -55,7 +48,7 @@ class TreeService:
             "tree_id": payload.tree_id,
             "species": await self._normalize("species", payload.species),
             "variety": await self._normalize("variety", payload.variety),
-            "zone_id": await self._check_zone(payload.zone_id),
+            "zone_id": payload.zone_id,          # free-text Rachio zone id, not validated
             "planted_date": payload.planted_date,
             "additional_context": payload.additional_context,
             "notes": payload.notes,
@@ -75,8 +68,7 @@ class TreeService:
             patch["species"] = await self._normalize("species", patch["species"])
         if "variety" in patch:
             patch["variety"] = await self._normalize("variety", patch["variety"])
-        if "zone_id" in patch:
-            patch["zone_id"] = await self._check_zone(patch["zone_id"])
+        # zone_id passes through unchecked (free-text Rachio zone id);
         # planted_date stays a date object (model_dump keeps it as such)
 
         row = await self._trees.update(tree_id, patch)
@@ -94,13 +86,6 @@ class TreeService:
         if not outcome.is_valid:
             raise DomainValidationError(field, outcome.reason or "invalid value")
         return outcome.canonical
-
-    async def _check_zone(self, zone_id: int | None) -> int | None:
-        if zone_id is None:
-            return None
-        if not await self._zones.exists(zone_id):
-            raise DomainValidationError("zone_id", f"zone {zone_id} does not exist")
-        return zone_id
 
     @staticmethod
     def _to_read(row: dict) -> TreeRead:

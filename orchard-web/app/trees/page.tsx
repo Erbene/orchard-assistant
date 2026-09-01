@@ -15,13 +15,15 @@ import { DataTable } from "@/components/ui/data-table";
 import { useToast } from "@/components/ui/toast";
 import { TreeEntityForm } from "@/components/forms/tree-entity-form";
 import { treeColumns } from "@/components/trees/columns";
+import type { ZoneOption } from "@/components/forms/tree-entity-form";
 import { ApiError, treesApi, zonesApi } from "@/lib/api";
-import type { Tree, Zone } from "@/lib/types";
+import type { RachioZone, Tree } from "@/lib/types";
 
 export default function TreesPage() {
   const toast = useToast();
   const [trees, setTrees] = React.useState<Tree[]>([]);
-  const [zones, setZones] = React.useState<Zone[]>([]);
+  const [zones, setZones] = React.useState<RachioZone[]>([]);
+  const [zoneOptions, setZoneOptions] = React.useState<ZoneOption[]>([]);
   const [loading, setLoading] = React.useState(true);
 
   const [formOpen, setFormOpen] = React.useState(false);
@@ -32,9 +34,8 @@ export default function TreesPage() {
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [t, z] = await Promise.all([treesApi.list(), zonesApi.list()]);
+      const t = await treesApi.list();
       setTrees(t);
-      setZones(z);
     } catch (err) {
       toast.error(
         "Could not load trees",
@@ -42,6 +43,19 @@ export default function TreesPage() {
       );
     } finally {
       setLoading(false);
+    }
+    // zones are optional context (Rachio may be unconfigured) - don't block trees
+    try {
+      const devices = await zonesApi.list();
+      setZones(devices.flatMap((d) => d.zones));
+      setZoneOptions(
+        devices.flatMap((d) =>
+          d.zones.map((z) => ({ id: z.id, label: `${d.name} · ${z.name}` })),
+        ),
+      );
+    } catch {
+      setZones([]);
+      setZoneOptions([]);
     }
   }, [toast]);
 
@@ -62,17 +76,15 @@ export default function TreesPage() {
     [zones],
   );
 
-  const zoneLabel = (id: number | null) =>
-    id == null
-      ? null
-      : (zones.find((z) => z.zone_id === id)?.name ?? `#${id}`);
+  const zoneLabel = (id: string | null) =>
+    !id ? null : (zones.find((z) => z.id === id)?.name ?? id);
 
   return (
     <div className="flex h-full flex-col">
       <header className="border-b px-6 py-4">
         <h1 className="text-lg font-semibold">Trees</h1>
         <p className="text-sm text-muted-foreground">
-          Tree records across all zones.
+          Tree records. Each tree can be bound to a Rachio irrigation zone.
         </p>
       </header>
 
@@ -110,7 +122,7 @@ export default function TreesPage() {
             </DialogTitle>
           </DialogHeader>
           <TreeEntityForm
-            zones={zones}
+            zoneOptions={zoneOptions}
             tree={editing}
             onCancel={() => setFormOpen(false)}
             onSaved={() => {

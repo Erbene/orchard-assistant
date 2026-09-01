@@ -1,29 +1,68 @@
 """End-to-end tests through the HTTP layer, exercising router -> service ->
 repository against the disposable ``orchard_test`` Postgres database
 (selected via a dependency override; tables are truncated between tests by
-the autouse fixture in conftest.py)."""
+the autouse fixture in conftest.py). Rachio is always mocked with respx."""
 from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_settings_dep
 from app.main import app
+from app.services.rachio import get_rachio_service
 
 from conftest import stack_settings
 
 API = "/api/v1"
+RACHIO = "https://api.rach.io/1/public"
+
+_PERSON = {"id": "p1"}
+_ACCOUNT = {
+    "id": "p1",
+    "devices": [
+        {
+            "id": "dev-1", "name": "Backyard", "status": "ONLINE", "model": "GEN3",
+            "zones": [
+                {"id": "rz-1", "name": "Row A", "enabled": True, "zoneNumber": 1,
+                 "customSoil": {"name": "Sand"}},
+                {"id": "rz-2", "name": "Row B", "enabled": True, "zoneNumber": 2},
+            ],
+        }
+    ],
+}
+
+
+def _mock_rachio() -> None:
+    respx.get(f"{RACHIO}/person/info").mock(return_value=httpx.Response(200, json=_PERSON))
+    respx.get(f"{RACHIO}/person/p1").mock(return_value=httpx.Response(200, json=_ACCOUNT))
+    respx.put(f"{RACHIO}/zone/start").mock(return_value=httpx.Response(204))
 
 
 @pytest.fixture()
 def client(tmp_path: Path):
     settings = stack_settings(uploads_dir=str(tmp_path))
     app.dependency_overrides[get_settings_dep] = lambda: settings
+    get_rachio_service.cache_clear()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+    get_rachio_service.cache_clear()
+
+
+@pytest.fixture()
+def rachio_client(tmp_path: Path):
+    """A client whose Settings carry a (fake) RACHIO_API_KEY."""
+    settings = stack_settings(uploads_dir=str(tmp_path), rachio_api_key="test-key")
+    app.dependency_overrides[get_settings_dep] = lambda: settings
+    get_rachio_service.cache_clear()
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+    get_rachio_service.cache_clear()
 
 
 def test_health(client):
@@ -40,65 +79,61 @@ def test_chat_streams_stub_reply(client):
     assert '"type":"start"' in body
     assert '"type":"text-delta"' in body
     assert '"finishReason":"stub"' in body
-    # stub echoes the last user message (streamed across chunks)
     assert "asked:" in body and "hello" in body
 
 
-def test_zone_crud_freetext_and_autoincrement(client):
-    # zone_id is auto-assigned; arbitrary free text is accepted verbatim
-    a = client.post(
-        f"{API}/zones",
-        json={"name": "North block", "soil_drainage": "fast", "water_source": "well + drip"},
-    )
-    assert a.status_code == 201, a.text
-    a_body = a.json()
-    assert isinstance(a_body["zone_id"], int)
-    assert a_body["soil_drainage"] == "fast"       # not coerced to a vocab term
-    assert a_body["water_source"] == "well + drip"
-
-    b = client.post(f"{API}/zones", json={"name": "South block", "soil_drainage": "heavy clay"})
-    assert b.json()["zone_id"] == a_body["zone_id"] + 1   # increments
-
-    zid = a_body["zone_id"]
-    patched = client.patch(
-        f"{API}/zones/{zid}", json={"soil_drainage": "  well   drained  ", "water_source": "  canal  "}
-    )
-    assert patched.json()["soil_drainage"] == "well drained"  # whitespace collapsed only
-    assert patched.json()["water_source"] == "canal"
-
-    assert client.get(f"{API}/zones/{zid}").json()["name"] == "North block"
-    assert client.delete(f"{API}/zones/{zid}").status_code == 204
-    assert client.get(f"{API}/zones/{zid}").status_code == 404
+def test_zones_require_rachio_key(client):
+    # no RACHIO_API_KEY -> graceful 503, app otherwise fine
+    assert client.get(f"{API}/zones").status_code == 503
+    assert client.post(f"{API}/zones/rz-1/water", json={"duration_minutes": 5}).status_code == 503
 
 
-def test_tree_crud_age_and_fk(client):
-    zid = client.post(f"{API}/zones", json={"name": "Zone 1"}).json()["zone_id"]
+@respx.mock
+def test_zones_are_read_only_from_rachio(rachio_client):
+    _mock_rachio()
 
+    devices = rachio_client.get(f"{API}/zones").json()
+    assert [d["id"] for d in devices] == ["dev-1"]
+    assert [z["id"] for z in devices[0]["zones"]] == ["rz-1", "rz-2"]
+    assert devices[0]["zones"][0]["custom_soil"] == {"name": "Sand"}
+
+    detail = rachio_client.get(f"{API}/zones/rz-1")
+    assert detail.status_code == 200
+    assert detail.json()["device_name"] == "Backyard"
+    assert detail.json()["zone"]["name"] == "Row A"
+    assert rachio_client.get(f"{API}/zones/nope").status_code == 404
+
+    started = rachio_client.post(f"{API}/zones/rz-1/water", json={"duration_minutes": 3})
+    assert started.status_code == 202
+    assert respx.calls.last.request.url.path == "/1/public/zone/start"
+
+    # there are NO zone-config mutation routes
+    assert rachio_client.post(f"{API}/zones", json={"name": "x"}).status_code == 405
+    assert rachio_client.patch(f"{API}/zones/rz-1", json={"name": "x"}).status_code == 405
+    assert rachio_client.delete(f"{API}/zones/rz-1").status_code == 405
+
+
+def test_tree_crud_age_and_freetext_zone(client):
+    # zone_id is a free-text Rachio zone id - any string, never validated
     r = client.post(
         f"{API}/trees",
-        json={"species": "custard apple", "variety": "gefner", "zone_id": zid, "planted_date": "2020-01-01"},
+        json={"species": "custard apple", "variety": "gefner",
+              "zone_id": "rz-999-unknown", "planted_date": "2020-01-01"},
     )
     assert r.status_code == 201, r.text
     body = r.json()
     tid = body["tree_id"]
-    assert body["species"] == "custard apple"     # stored as typed
-    assert body["variety"] == "gefner"
-    assert body["zone_id"] == zid
+    assert body["species"] == "custard apple"
+    assert body["zone_id"] == "rz-999-unknown"       # stored verbatim, no 422
     assert body["age_days"] > 2000 and body["age_years"] >= 5
 
-    # unknown zone -> 422 (referential check, not a vocabulary check)
-    assert client.post(
-        f"{API}/trees", json={"species": "mango", "variety": "x", "zone_id": 9999}
-    ).status_code == 422
-
-    r = client.patch(f"{API}/trees/{tid}", json={"variety": "nam doc mai", "notes": "grafted"})
+    r = client.patch(f"{API}/trees/{tid}", json={"variety": "nam doc mai", "zone_id": "rz-1"})
     assert r.json()["variety"] == "nam doc mai"
-    assert r.json()["notes"] == "grafted"
+    assert r.json()["zone_id"] == "rz-1"
 
-    assert len(client.get(f"{API}/trees", params={"zone_id": zid}).json()) == 1
+    assert len(client.get(f"{API}/trees", params={"zone_id": "rz-1"}).json()) == 1
+    assert client.get(f"{API}/trees", params={"zone_id": "rz-1"}).json()[0]["tree_id"] == tid
     assert client.get(f"{API}/trees", params={"species": "sapodilla"}).json() == []
 
-    # zone still referenced -> 409
-    assert client.delete(f"{API}/zones/{zid}").status_code == 409
     assert client.delete(f"{API}/trees/{tid}").status_code == 204
     assert client.get(f"{API}/trees/{tid}").status_code == 404

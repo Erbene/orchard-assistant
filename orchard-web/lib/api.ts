@@ -7,14 +7,13 @@
  */
 import type {
   ApiErrorBody,
+  RachioDevice,
   Source,
   SourceDetail,
   Tree,
   TreeInput,
   TreePatch,
-  Zone,
-  ZoneInput,
-  ZonePatch,
+  ZoneDetail,
 } from "./types";
 
 export const API_PREFIX = "/api/v1";
@@ -135,17 +134,24 @@ export const apiClient = {
 // Typed resource helpers (thin wrappers over apiClient)
 // --------------------------------------------------------------------------
 
+/**
+ * Rachio irrigation zones. Read-only except `water` (a manual run) — there is
+ * deliberately no create / update / delete. Zone config is edited in the
+ * Rachio app.
+ */
 export const zonesApi = {
-  list: () => apiClient.get<Zone[]>(`${API_PREFIX}/zones`),
-  get: (id: number) => apiClient.get<Zone>(`${API_PREFIX}/zones/${id}`),
-  create: (input: ZoneInput) => apiClient.post<Zone>(`${API_PREFIX}/zones`, input),
-  update: (id: number, patch: ZonePatch) =>
-    apiClient.patch<Zone>(`${API_PREFIX}/zones/${id}`, patch),
-  remove: (id: number) => apiClient.del(`${API_PREFIX}/zones/${id}`),
+  list: () => apiClient.get<RachioDevice[]>(`${API_PREFIX}/zones`),
+  get: (zoneId: string) =>
+    apiClient.get<ZoneDetail>(`${API_PREFIX}/zones/${encodeURIComponent(zoneId)}`),
+  water: (zoneId: string, durationMinutes: number) =>
+    apiClient.post<{ status: string }>(
+      `${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/water`,
+      { duration_minutes: durationMinutes },
+    ),
 };
 
 export const treesApi = {
-  list: (query?: { species?: string; zone_id?: number }) =>
+  list: (query?: { species?: string; zone_id?: string }) =>
     apiClient.get<Tree[]>(`${API_PREFIX}/trees`, { query }),
   get: (id: number) => apiClient.get<Tree>(`${API_PREFIX}/trees/${id}`),
   create: (input: TreeInput) => apiClient.post<Tree>(`${API_PREFIX}/trees`, input),

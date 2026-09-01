@@ -15,7 +15,7 @@ from .task import (
     TaskUpdate,
 )
 from .tree import TreeCreate, TreeRead, TreeUpdate
-from .zone import ZoneCreate, ZoneRead, ZoneUpdate
+from .zone import WaterZoneRequest, ZoneDetail
 
 __all__ = [
     "ChatMessageIn",
@@ -34,7 +34,6 @@ __all__ = [
     "TreeCreate",
     "TreeRead",
     "TreeUpdate",
-    "ZoneCreate",
-    "ZoneRead",
-    "ZoneUpdate",
+    "WaterZoneRequest",
+    "ZoneDetail",
 ]

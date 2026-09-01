@@ -12,8 +12,22 @@ py="$root/orchard-server/.venv/Scripts/python.exe"
 [ -x "$py" ] || { echo "No venv. Run: cd orchard-server && python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt"; exit 1; }
 [ -d "$root/orchard-web/node_modules" ] || { echo "No node_modules. Run: cd orchard-web && npm install"; exit 1; }
 
+env_file="$root/orchard-server/.env"
+env_arg=(); [ -f "$env_file" ] && env_arg=(--env-file "$env_file")
+
+# free stale listeners on our ports
+for port in 8000 3000; do
+  for pid in $(netstat -ano 2>/dev/null | grep -E ":$port .*LISTEN" | awk '{print $NF}' | sort -u); do
+    echo "  stopping pid $pid on :$port"; taskkill //F //PID "$pid" >/dev/null 2>&1 || kill "$pid" 2>/dev/null || true
+  done
+done
+
 echo "Bringing up postgres + chromadb (docker compose)..."
 docker compose -f "$root/orchard-server/docker-compose.yml" up -d --wait postgres chromadb
+
+if [ -f "$env_file" ]; then
+  ( cd "$root/orchard-server" && "$py" -c "from app.config import Settings; s=Settings(); print(f'config: rachio={s.rachio_enabled} db={s.postgres_db}@{s.postgres_host}:{s.postgres_port}')" ) 2>&1 || true
+fi
 
 pids=()
 cleanup() {
@@ -24,7 +38,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-( cd "$root/orchard-server" && "$py" -m uvicorn app.main:app --reload --port 8000 ) &
+( cd "$root/orchard-server" && "$py" -m uvicorn app.main:app --reload --port 8000 "${env_arg[@]}" ) &
 pids+=($!)
 ( cd "$root/orchard-web" && npm run dev ) &
 pids+=($!)

@@ -1,40 +1,28 @@
 """Zone transport models.
 
-All descriptive fields are free text - no enums, no closed vocabularies. The
-service layer runs them through the validation agent only for light
-normalization. ``zone_id`` is assigned by the database (auto-increment).
+Zones are the grower's **Rachio** irrigation zones, read live and **read-only**
+(all configuration is edited in the Rachio app). The rich device/zone objects
+are ``RachioDevice`` / ``RachioZone`` in ``app/services/rachio.py``; this
+module only adds the request/response wrappers the router needs.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from ..services.rachio import RachioZone
 
 
-class ZoneCreate(BaseModel):
-    name: str = Field(min_length=1)
-    soil_drainage: str | None = Field(
-        default=None,
-        description="Free text, e.g. 'sandy fast draining', 'fast', 'heavy clay'.",
+class ZoneDetail(BaseModel):
+    """One Rachio zone plus the device it belongs to."""
+
+    device_id: str
+    device_name: str
+    zone: RachioZone
+
+
+class WaterZoneRequest(BaseModel):
+    """Body for ``POST /api/v1/zones/{zone_id}/water`` - the only zone write."""
+
+    duration_minutes: int = Field(
+        gt=0, le=180, description="Manual run length in minutes (1-180)."
     )
-    water_source: str | None = Field(
-        default=None,
-        description="Free text - irrigation water source (well, canal, municipal, rainwater, …).",
-    )
-
-
-class ZoneUpdate(BaseModel):
-    """Partial update - only fields explicitly supplied are changed."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, min_length=1)
-    soil_drainage: str | None = None
-    water_source: str | None = None
-
-
-class ZoneRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    zone_id: int
-    name: str
-    soil_drainage: str | None = None
-    water_source: str | None = None
