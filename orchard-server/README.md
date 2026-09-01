@@ -1,7 +1,9 @@
 # Orchard Assistant API
 
-FastAPI + SQLite service for orchard **zones** and **trees**, built as a
-clean layered architecture.
+FastAPI + SQLite service for orchard **zones**, **trees** and **tasks**, built
+as a clean layered architecture. No ORM — DDL lives in `sql/schema.sql`,
+repositories issue raw SQL and return `dict` rows, and "models" are the
+Pydantic schemas in `schemas/`.
 
 ## Layers
 
@@ -22,18 +24,15 @@ app/
       trees.py
 
   schemas/           Pydantic transport models (free-text str, no enums)
-    zone.py
-    tree.py
+    zone.py  tree.py  task.py  user_context.py
 
   services/          BUSINESS LOGIC - HTTP-agnostic, returns Pydantic/plain objects
-    zone_service.py
-    tree_service.py
+    zone_service.py  tree_service.py  task_service.py  user_service.py
     validators.py      Validation Agent interface + placeholder implementations
     exceptions.py      DomainError / NotFoundError / ConflictError / DomainValidationError
 
   repositories/      PERSISTENCE - raw SQL only, dict rows in/out
-    zone_repository.py
-    tree_repository.py
+    zone_repository.py  tree_repository.py  task_repository.py  user_repository.py
 ```
 
 **Dependency flow (per request):**
@@ -91,6 +90,28 @@ All API routes are mounted under **`/api/v1`** (`GET /health` is not). The
 
 Tree `age_days` / `age_years` are derived from `planted_date` on read, never stored.
 
+### Tasks (Phase 1 — service + MCP only)
+
+`task` (FK → `tree`, `ON DELETE CASCADE`) and singleton `user_context` tables,
+with `TaskRepository` / `UserRepository`, `TaskService` / `UserService`, and
+DI factories in `dependencies.py`. **No REST routers yet** — Phase 2 adds
+`/api/v1/tasks`. Today tasks are reachable through the MCP tools below.
+
+- `task`: `id`, `tree_id`, `action_type` (free text), `status`
+  (`pending`/`completed`/`deferred` — a real state field, so it *is*
+  constrained), `priority_score` (float), `scheduled_date` (ISO datetime, nullable),
+  `frequency_days` (int, nullable — set = recurring), `created_at`, `completed_at`.
+- `user_context`: `available_labor_hours_per_day` (float),
+  `available_products` (JSON list of strings), `updated_at`.
+- `TaskService` owns transitions: `create_task` (FK-checked), `mark_complete`
+  (stamps `completed_at`, spawns the next occurrence for recurring tasks),
+  `defer_task`, `batch_update_priorities` (atomic), `create_baseline_tasks`.
+- `TaskRepository.list_pending(scheduled_before=…)` — pending only, ordered by
+  `priority_score` DESC; the date filter keeps due-by tasks plus unscheduled ones.
+
+Adding these two tables needs **no migration** — `CREATE TABLE IF NOT EXISTS`
+in `schema.sql` picks them up on the next start for an existing `orchard.db`.
+
 ### Chat (SSE)
 
 `POST /api/v1/chat` takes `{ "messages": [{ "role": "user", "content": "…" }] }`
@@ -115,10 +136,14 @@ is meant to stay.
 the service layer directly (one short-lived SQLite connection per call,
 wrapped in a transaction) — no HTTP calls to self.
 
-**Tools:** `list_zones`, `get_zone_details`, `create_zone`, `update_zone`,
-`delete_zone`, `list_trees`, `get_tree_details`, `create_tree`, `update_tree`,
-`delete_tree` — full CRUD for both entities.
-**Resource:** `orchard://system-summary` — plain-text zone/tree counts + status.
+**Tools:**
+- zones — `list_zones`, `get_zone_details`, `create_zone`, `update_zone`, `delete_zone`
+- trees — `list_trees`, `get_tree_details`, `create_tree`, `update_tree`, `delete_tree`
+- tasks (Foreman agent) — `get_pending_tasks`, `get_task_details`, `create_task`,
+  `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`, `defer_task`
+- constraints — `get_user_constraints`, `update_user_constraints`
+
+**Resource:** `orchard://system-summary` — plain-text zone/tree/task counts + status.
 
 Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as
 `ToolError`, so the client sees a clean message, not a stack trace.

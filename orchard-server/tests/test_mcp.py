@@ -27,6 +27,12 @@ EXPECTED_TOOLS = {
     "create_tree",
     "update_tree",
     "delete_tree",
+    "get_pending_tasks",
+    "create_task",
+    "batch_update_task_priorities",
+    "mark_task_complete",
+    "get_user_constraints",
+    "update_user_constraints",
 }
 
 
@@ -79,11 +85,45 @@ async def _exercise(db_path: str) -> None:
             listed = await session.call_tool("list_trees", {"zone_id": zone_id})
             assert not listed.isError
             assert _payload(listed)[0]["variety"] == "Kent"
+            tree_id = _payload(created)["tree_id"]
+
+            # --- Foreman task tools -----------------------------------
+            t1 = _payload(await session.call_tool(
+                "create_task", {"tree_id": tree_id, "action_type": "prune", "priority_score": 3.0}
+            ))
+            t2 = _payload(await session.call_tool(
+                "create_task", {"tree_id": tree_id, "action_type": "fertilize", "priority_score": 8.0}
+            ))
+
+            queue = _payload(await session.call_tool("get_pending_tasks", {}))
+            assert [t["action_type"] for t in queue] == ["fertilize", "prune"]
+
+            batched = await session.call_tool(
+                "batch_update_task_priorities",
+                {"task_updates": [
+                    {"task_id": t1["id"], "priority_score": 10.0, "scheduled_date": "2026-09-15"},
+                    {"task_id": t2["id"], "priority_score": 1.0},
+                ]},
+            )
+            assert not batched.isError, batched.content
+            requeued = _payload(await session.call_tool("get_pending_tasks", {}))
+            assert [t["action_type"] for t in requeued] == ["prune", "fertilize"]
+
+            done = await session.call_tool("mark_task_complete", {"task_id": t1["id"]})
+            assert _payload(done)["status"] == "completed"
+
+            constraints = _payload(await session.call_tool("get_user_constraints", {}))
+            assert constraints["available_labor_hours_per_day"] == 8.0
+            updated_c = _payload(await session.call_tool(
+                "update_user_constraints", {"available_products": ["urea", "neem oil"]}
+            ))
+            assert updated_c["available_products"] == ["urea", "neem oil"]
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text
             assert "Zones:            1" in body
             assert "Trees:            1" in body
+            assert "Tasks (total):    2" in body
             assert "mango: 1" in body
 
             missing = await session.call_tool(

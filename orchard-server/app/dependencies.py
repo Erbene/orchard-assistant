@@ -28,10 +28,14 @@ from fastapi import Depends
 
 from .config import Settings, get_settings
 from .db import connect, init_db
+from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
+from .repositories.user_repository import UserRepository
 from .repositories.zone_repository import ZoneRepository
 from .services.chat_service import ChatService
+from .services.task_service import TaskService
 from .services.tree_service import TreeService
+from .services.user_service import UserService
 from .services.validators import ValidationAgent, get_default_validation_agent
 from .services.zone_service import ZoneService
 
@@ -74,6 +78,14 @@ def get_tree_repository(conn=Depends(get_connection)) -> TreeRepository:
     return TreeRepository(conn)
 
 
+def get_task_repository(conn=Depends(get_connection)) -> TaskRepository:
+    return TaskRepository(conn)
+
+
+def get_user_repository(conn=Depends(get_connection)) -> UserRepository:
+    return UserRepository(conn)
+
+
 # -- validation agent -------------------------------------------------
 
 def get_validation_agent() -> ValidationAgent:
@@ -95,6 +107,19 @@ def get_tree_service(
     validator: ValidationAgent = Depends(get_validation_agent),
 ) -> TreeService:
     return TreeService(trees, zones, validator)
+
+
+def get_task_service(
+    tasks: TaskRepository = Depends(get_task_repository),
+    trees: TreeRepository = Depends(get_tree_repository),
+) -> TaskService:
+    return TaskService(tasks, trees)
+
+
+def get_user_service(
+    users: UserRepository = Depends(get_user_repository),
+) -> UserService:
+    return UserService(users)
 
 
 def get_chat_service() -> ChatService:
