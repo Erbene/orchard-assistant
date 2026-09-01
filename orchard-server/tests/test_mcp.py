@@ -35,7 +35,7 @@ EXPECTED_TOOLS = {
     "list_sources",
     "add_text_source",
     "link_tree_sources",
-    "search_ag_knowledge",
+    "search_knowledge",
 }
 
 
@@ -121,28 +121,35 @@ async def _exercise(db_path: str) -> None:
             done = await session.call_tool("mark_task_complete", {"task_id": t1["id"]})
             assert _payload(done)["status"] == "completed"
 
-            # --- RAG fusion tool: no sources linked -> graceful notice -----
-            rag = await session.call_tool(
-                "search_ag_knowledge", {"tree_id": tree_id, "query": "pruning"}
-            )
-            assert not rag.isError
-            assert "No knowledge sources" in _payload(rag)
+            # --- knowledge base: empty, then whole-KB search, then scoped ---
+            assert "no linked knowledge sources" in _payload(await session.call_tool(
+                "search_knowledge", {"query": "pruning", "tree_id": tree_id}
+            ))
+            assert "No relevant passages" in _payload(await session.call_tool(
+                "search_knowledge", {"query": "pruning"}
+            ))
 
-            # --- full RAG flow from the terminal: add -> link -> search -----
             src = _payload(await session.call_tool("add_text_source", {
                 "name": "Mango notes",
                 "text": "Prune young mango trees to three or four scaffold limbs "
                         "in the first years. Seal large cuts.",
             }))
+
+            # whole KB — no tree needed ("according to my sources ...")
+            fused = _payload(await session.call_tool("search_knowledge", {
+                "query": "how many limbs when pruning a young mango",
+            }))
+            assert f"--- SOURCE {src['id']}: Mango notes ---" in fused
+            assert "scaffold" in fused
+
+            # tree-scoped still works once linked
             assert not (await session.call_tool(
                 "link_tree_sources", {"tree_id": tree_id, "source_ids": [src["id"]]}
             )).isError
-            fused = _payload(await session.call_tool(
-                "search_ag_knowledge",
-                {"tree_id": tree_id, "query": "how many limbs when pruning a young mango"},
-            ))
-            assert f"--- SOURCE {src['id']} ---" in fused
-            assert "scaffold" in fused
+            scoped = _payload(await session.call_tool("search_knowledge", {
+                "query": "pruning", "tree_id": tree_id,
+            }))
+            assert f"--- SOURCE {src['id']}" in scoped
 
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text

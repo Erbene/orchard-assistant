@@ -122,11 +122,14 @@ user_context`, `CREATE TABLE IF NOT EXISTS sources/tree_sources`) and
 `raw_content`, `upload_date`) + `tree_sources` (`tree_id`, `source_id`) mapping.
 `POST /api/v1/sources` extracts text (PDF via `pypdf`, MD/TXT decoded), chunks
 it (`app/rag/chunking.py`), and adds every chunk to one ChromaDB collection
-with `metadata = {"source_id": <id>}`. `search_ag_knowledge` (MCP) then runs an
-**independent** vector search per linked source and returns the results grouped
-under `--- SOURCE {id} ---` headers, so the agent does the fusion itself.
-Chroma persists at `ORCHARD_CHROMA_PATH` (default `./chroma`); uploaded files at
-`ORCHARD_UPLOADS_DIR`. First ingest downloads the MiniLM embedding model (~80 MB).
+with `metadata = {"source_id": <id>}`. **`search_knowledge(query, tree_id=None)`**
+(MCP) retrieves and groups the results per source under
+`--- SOURCE {id}: {name} ---` headers so the model does the fusion itself.
+`tree_id` omitted → searches the whole KB (the common "according to my sources"
+case); `tree_id` given → only that tree's linked sources. Also exposes an
+`ask_sources` MCP **prompt**. Chroma persists at `ORCHARD_CHROMA_PATH` (default
+`./chroma`); uploaded files at `ORCHARD_UPLOADS_DIR`. First ingest downloads the
+MiniLM embedding model (~80 MB).
 
 ### Agent skeleton (`app/agent/`)
 
@@ -169,8 +172,12 @@ wrapped in a transaction) — no HTTP calls to self.
   `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`, `defer_task`
   (`create_task` / `create_baseline_tasks` require the LLM to supply
   `estimated_minutes` + `required_resources`)
-- knowledge (Agronomist) — `search_ag_knowledge(tree_id, query)` — consensus-fusion RAG
+- knowledge base — `list_sources`, `add_text_source(name, text)`,
+  `link_tree_sources(tree_id, source_ids)`,
+  **`search_knowledge(query, tree_id=None)`** — retrieve grounded passages
+  (whole KB by default, or one tree's linked sources)
 
+**Prompt:** `ask_sources(question)` — canned "answer strictly from my ingested sources".
 **Resource:** `orchard://system-summary` — zone/tree/task/source counts + status.
 
 Domain errors (`NotFoundError`, `DomainValidationError`, …) are re-raised as

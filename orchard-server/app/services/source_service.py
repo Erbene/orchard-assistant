@@ -120,8 +120,51 @@ class SourceService:
         return await self.sources_for_tree(tree_id)
 
     def allowed_source_ids(self, tree_id: int) -> list[int]:
-        """Source ids linked to a tree (used by the RAG fusion tool)."""
+        """Source ids linked to a tree (used to scope the RAG fusion tool)."""
         return self._sources.source_ids_for_tree(tree_id)
+
+    # -- retrieval --------------------------------------------
+
+    async def search(
+        self, query: str, *, source_ids: list[int] | None = None, per_source: int = 4
+    ) -> list[dict[str, object]]:
+        """Consensus-fusion retrieval.
+
+        ``source_ids=None`` searches the entire knowledge base; otherwise only
+        the given sources. Results are grouped by source:
+        ``[{"source_id", "name", "chunks": [...]}, ...]`` ordered by relevance.
+        """
+        if source_ids is not None and not source_ids:
+            return []
+
+        if source_ids is None:
+            pairs = self._store.search_all(query, n_results=per_source * 4)
+        else:
+            pairs = []
+            for sid in source_ids:
+                pairs += [
+                    (sid, chunk)
+                    for chunk in self._store.search(
+                        query, source_id=sid, n_results=per_source
+                    )
+                ]
+
+        names = {row["id"]: row["name"] for row in self._sources.list()}
+        grouped: dict[int, list[str]] = {}
+        for sid, chunk in pairs:
+            grouped.setdefault(sid, []).append(chunk)
+
+        _log.info(
+            "rag.search",
+            query=query[:120],
+            scope=source_ids or "all",
+            sources_hit=len(grouped),
+            chunks=sum(len(c) for c in grouped.values()),
+        )
+        return [
+            {"source_id": sid, "name": names.get(sid, f"source {sid}"), "chunks": chunks}
+            for sid, chunks in grouped.items()
+        ]
 
     # -- helpers ----------------------------------------------
 

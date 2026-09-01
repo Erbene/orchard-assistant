@@ -24,7 +24,7 @@ kinds of work, so the graph splits into two specialists:
 
 | Specialist | Job | Grounded by |
 | ---------- | --- | ----------- |
-| **Agronomist** | Answer horticultural questions ("why are the leaves yellowing?", "when do I prune a young mango?") | `search_ag_knowledge` MCP tool → Consensus-Fusion RAG over the sources linked to the active tree |
+| **Agronomist** | Answer horticultural questions ("why are the leaves yellowing?", "when do I prune a young mango?") | `search_knowledge` MCP tool → Consensus-Fusion RAG over the sources linked to the active tree |
 | **Foreman** | Turn the pending-task backlog into a plan for *this* work session | `get_pending_tasks` / `batch_update_task_priorities` MCP tools |
 
 **Why "Just-In-Time".** The system does **not** store a labour budget or an
@@ -94,7 +94,7 @@ START
 | Node | Sync/async | Stub behaviour | Real behaviour (documented inline) |
 | ---- | ---------- | -------------- | ---------------------------------- |
 | `orchestrator` | sync | Emits a `[orchestrator] routing…` marker message. | LLM reads `messages`, classifies the turn, extracts `active_tree_id`. |
-| `agronomist_agent` | async | Emits a stub message describing what it *would* do. | LLM bound to `search_ag_knowledge`; calls it with `active_tree_id` + the question, fuses the per-`--- SOURCE n ---` blocks, drafts an answer. |
+| `agronomist_agent` | async | Emits a stub message describing what it *would* do. | LLM bound to `search_knowledge`; calls it with `active_tree_id` + the question, fuses the per-`--- SOURCE n ---` blocks, drafts an answer. |
 | `foreman_agent` | async | **Real JIT check** (below); otherwise a stub "would fit ~N min" message. | LLM: pull `get_pending_tasks`, fit `available_minutes` / `confirmed_resources`, commit via `batch_update_task_priorities`. |
 
 Every node returns `{"messages": [AIMessage(..., name="<node>")]}` — the
@@ -183,7 +183,7 @@ Foreman proceeds once it's known, a question routes through the Agronomist).
 
 The agent does **not** re-implement data access. It reuses the orchard **MCP
 server** (`app/mcp_server.py`), exposing every tool — `list_trees`,
-`get_pending_tasks`, `batch_update_task_priorities`, `search_ag_knowledge`, … —
+`get_pending_tasks`, `batch_update_task_priorities`, `search_knowledge`, … —
 as LangChain `BaseTool`s via `langchain-mcp-adapters`:
 
 ```python
@@ -233,7 +233,7 @@ LANGCHAIN_PROJECT=orchard-agent
    have it write `active_tree_id` and a routing hint into state (add the field
    to `AgentState`), then simplify `route_from_orchestrator` to read it.
 2. **`agronomist_agent`** — `load_orchard_tools()`, bind to the model, let it
-   call `search_ag_knowledge(tree_id=active_tree_id, query=…)` and reason over
+   call `search_knowledge(query=…, tree_id=active_tree_id)` and reason over
    the fused source blocks.
 3. **`foreman_agent`** — keep the `available_minutes is None` guard; below it,
    pull `get_pending_tasks`, ask the model to select/re-order tasks that fit

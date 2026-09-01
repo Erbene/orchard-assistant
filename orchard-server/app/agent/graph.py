@@ -41,8 +41,8 @@ def orchestrator(state: AgentState) -> dict:
 async def agronomist_agent(state: AgentState) -> dict:
     """Answer horticultural questions grounded in the knowledge base.
 
-    Real version: an LLM bound to the ``search_ag_knowledge`` MCP tool calls
-    ``search_ag_knowledge(tree_id=state['active_tree_id'], query=...)``, does
+    Real version: an LLM bound to the ``search_knowledge`` MCP tool calls
+    ``search_knowledge(query=..., tree_id=state["active_tree_id"])``, does
     consensus fusion over the per-source blocks, then drafts an answer.
     """
     # tools = await load_orchard_tools()
@@ -50,7 +50,7 @@ async def agronomist_agent(state: AgentState) -> dict:
     return {
         "messages": [
             AIMessage(
-                "[agronomist] (stub) would call search_ag_knowledge and fuse "
+                "[agronomist] (stub) would call search_knowledge and fuse "
                 "the per-source results here.",
                 name="agronomist",
             )

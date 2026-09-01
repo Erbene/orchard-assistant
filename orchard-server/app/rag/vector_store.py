@@ -56,6 +56,35 @@ class OrchardVectorStore:
         )
         return documents
 
+    def search_all(
+        self,
+        query: str,
+        *,
+        n_results: int = 12,
+        source_ids: list[int] | None = None,
+    ) -> list[tuple[int, str]]:
+        """Semantic search across the whole KB (or a subset of ``source_ids``).
+
+        Returns ``(source_id, chunk)`` pairs ordered by relevance.
+        """
+        where = {"source_id": {"$in": source_ids}} if source_ids else None
+        result = self._collection.query(
+            query_texts=[query], n_results=n_results, where=where
+        )
+        documents = (result.get("documents") or [[]])[0]
+        metadatas = (result.get("metadatas") or [[]])[0]
+        pairs = [
+            (int(meta.get("source_id", 0)), doc)
+            for doc, meta in zip(documents, metadatas)
+        ]
+        _log.debug(
+            "chroma.search_all",
+            query=query[:120],
+            scope=source_ids or "all",
+            hits=len(pairs),
+        )
+        return pairs
+
 
 @lru_cache
 def get_vector_store(settings: Settings | None = None) -> OrchardVectorStore:

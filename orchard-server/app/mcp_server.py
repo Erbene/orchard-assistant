@@ -591,43 +591,60 @@ async def link_tree_sources(tree_id: int, source_ids: list[int]) -> list[dict]:
 
 
 @mcp.tool()
-async def search_ag_knowledge(tree_id: int, query: str) -> str:
-    """Search the agronomy knowledge base for passages relevant to ``query``,
-    restricted to the sources linked to ``tree_id``.
-
-    Consensus-fusion retrieval: each linked source is searched *independently*
-    in the vector store, and the results are returned grouped by source so the
-    agent can weigh agreement / disagreement between sources itself.
+async def search_knowledge(query: str, tree_id: int | None = None) -> str:
+    """Search the user's orchard knowledge base and return the relevant
+    passages. Call this for any *"according to my sources / notes / documents"*
+    question, or whenever the user wants an answer grounded in what they have
+    ingested rather than general knowledge.
 
     Args:
-        tree_id: The tree whose linked sources define the allowed corpus.
-        query: A natural-language question, e.g. "when should I prune a young
-            mango" or "signs of nitrogen deficiency".
+        query: A natural-language question, e.g. "how often should I water a
+            mango tree" or "signs of nitrogen deficiency in citrus".
+        tree_id: Optional. When given, only the sources linked to that tree
+            are searched (via ``link_tree_sources``). Omit to search **every**
+            ingested source — the normal case.
 
-    Returns a single string. Each linked source that had a hit contributes a
-    block:  ``--- SOURCE {id} ---`` followed by its matching chunks. Returns a
-    short notice if the tree has no linked sources or nothing matched.
+    Consensus-fusion retrieval: results are grouped per source so the model can
+    weigh agreement / disagreement itself. Each hit contributes a block:
+    ``--- SOURCE {id}: {name} ---`` followed by the matching chunks. Returns a
+    short notice if nothing was ingested / matched. Cite the source id(s) in
+    your answer.
     """
     with _session() as svc:
-        try:
-            allowed_source_ids = svc.sources.allowed_source_ids(tree_id)
-        except DomainError as exc:
-            raise ToolError(str(exc)) from exc
+        scope: list[int] | None = None
+        if tree_id is not None:
+            try:
+                scope = svc.sources.allowed_source_ids(tree_id)
+            except DomainError as exc:
+                raise ToolError(str(exc)) from exc
+            if not scope:
+                return (
+                    f"Tree {tree_id} has no linked knowledge sources. Link some "
+                    f"with link_tree_sources, or call search_knowledge without a "
+                    f"tree_id to search the whole knowledge base."
+                )
+        groups = await svc.sources.search(query, source_ids=scope)
 
-    if not allowed_source_ids:
-        return f"No knowledge sources are linked to tree {tree_id}."
+    if not groups:
+        where = "the knowledge base" if scope is None else f"tree {tree_id}'s sources"
+        return f"No relevant passages found in {where}."
 
-    store = get_vector_store(get_settings())
-    blocks: list[str] = []
-    for source_id in allowed_source_ids:
-        chunks = store.search(query, source_id=source_id, n_results=4)
-        if chunks:
-            body = "\n".join(f"- {c.strip()}" for c in chunks)
-            blocks.append(f"--- SOURCE {source_id} ---\n{body}")
+    return "\n\n".join(
+        f"--- SOURCE {g['source_id']}: {g['name']} ---\n"
+        + "\n".join(f"- {c.strip()}" for c in g["chunks"])
+        for g in groups
+    )
 
-    if not blocks:
-        return "No relevant passages found in the sources linked to this tree."
-    return "\n\n".join(blocks)
+
+@mcp.prompt(title="Ask the knowledge base")
+def ask_sources(question: str) -> str:
+    """Answer a question strictly from the user's ingested sources."""
+    return (
+        f"Use the `search_knowledge` tool to look up the orchard knowledge "
+        f"base, then answer this question using ONLY what the returned sources "
+        f"say. Cite the source id(s). If the sources don't cover it, say so.\n\n"
+        f"Question: {question}"
+    )
 
 
 # ---------------------------------------------------------------------------
