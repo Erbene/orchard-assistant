@@ -541,6 +541,56 @@ async def defer_task(task_id: int, until: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+async def list_sources() -> list[dict]:
+    """List every knowledge-base source (id, name, type, upload date).
+
+    Sources are documents (pasted text or uploaded files) that have been
+    chunked into the vector store. A source only becomes searchable for a tree
+    once it is linked with ``link_tree_sources``.
+    """
+    with _session() as svc:
+        return [s.model_dump(mode="json") for s in await svc.sources.list_sources()]
+
+
+@mcp.tool()
+async def add_text_source(name: str, text: str) -> dict:
+    """Add a text-based knowledge source: store it and embed it into the
+    vector store. Returns the new source (with its id).
+
+    Args:
+        name: A short human label, e.g. "UF/IFAS mango pruning guide".
+        text: The full text / Markdown to ingest.
+
+    After adding, call ``link_tree_sources`` to make it searchable for a tree.
+    """
+    with _session() as svc:
+        try:
+            created = await svc.sources.ingest_text(name, text)
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+        return created.model_dump(mode="json")
+
+
+@mcp.tool()
+async def link_tree_sources(tree_id: int, source_ids: list[int]) -> list[dict]:
+    """Set the full list of knowledge sources linked to a tree (replaces any
+    existing links). ``search_ag_knowledge(tree_id, ...)`` searches exactly
+    these sources.
+
+    Args:
+        tree_id: An existing tree.
+        source_ids: Source ids to link (from ``list_sources``). Pass ``[]`` to
+            unlink everything.
+    """
+    with _session() as svc:
+        try:
+            linked = await svc.sources.set_tree_sources(tree_id, source_ids)
+        except DomainError as exc:
+            raise ToolError(str(exc)) from exc
+        return [s.model_dump(mode="json") for s in linked]
+
+
+@mcp.tool()
 async def search_ag_knowledge(tree_id: int, query: str) -> str:
     """Search the agronomy knowledge base for passages relevant to ``query``,
     restricted to the sources linked to ``tree_id``.
@@ -654,4 +704,11 @@ def _parse_dt(value: str | None, *, field: str) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import sys
+
+    from .core.logging import configure_logging
+
+    # stdio uses stdout for the JSON-RPC protocol - every log line MUST go to
+    # stderr or it corrupts the stream. (In SSE mode main.py configures stdout.)
+    configure_logging(get_settings(), stream=sys.stderr)
     mcp.run(transport="stdio")

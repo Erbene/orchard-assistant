@@ -14,14 +14,20 @@ from functools import lru_cache
 import chromadb
 
 from ..config import Settings, get_settings
+from ..core.logging import get_logger
 
 _COLLECTION = "orchard_knowledge"
+_log = get_logger("app.rag.chroma")
 
 
 class OrchardVectorStore:
     def __init__(self, path: str) -> None:
         self._client = chromadb.PersistentClient(path=path)
         self._collection = self._client.get_or_create_collection(_COLLECTION)
+        _log.info(
+            "chroma.ready", path=path, collection=_COLLECTION,
+            documents=self._collection.count(),
+        )
 
     def add_source_chunks(self, source_id: int, chunks: list[str]) -> int:
         """Embed and store chunks for one SQL source. Returns the count added."""
@@ -44,8 +50,11 @@ class OrchardVectorStore:
             n_results=n_results,
             where={"source_id": source_id},
         )
-        documents = result.get("documents") or [[]]
-        return documents[0]
+        documents = (result.get("documents") or [[]])[0]
+        _log.debug(
+            "chroma.search", source_id=source_id, query=query[:120], hits=len(documents)
+        )
+        return documents
 
 
 @lru_cache

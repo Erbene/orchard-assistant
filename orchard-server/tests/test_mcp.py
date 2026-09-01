@@ -32,6 +32,9 @@ EXPECTED_TOOLS = {
     "create_baseline_tasks",
     "batch_update_task_priorities",
     "mark_task_complete",
+    "list_sources",
+    "add_text_source",
+    "link_tree_sources",
     "search_ag_knowledge",
 }
 
@@ -125,12 +128,28 @@ async def _exercise(db_path: str) -> None:
             assert not rag.isError
             assert "No knowledge sources" in _payload(rag)
 
+            # --- full RAG flow from the terminal: add -> link -> search -----
+            src = _payload(await session.call_tool("add_text_source", {
+                "name": "Mango notes",
+                "text": "Prune young mango trees to three or four scaffold limbs "
+                        "in the first years. Seal large cuts.",
+            }))
+            assert not (await session.call_tool(
+                "link_tree_sources", {"tree_id": tree_id, "source_ids": [src["id"]]}
+            )).isError
+            fused = _payload(await session.call_tool(
+                "search_ag_knowledge",
+                {"tree_id": tree_id, "query": "how many limbs when pruning a young mango"},
+            ))
+            assert f"--- SOURCE {src['id']} ---" in fused
+            assert "scaffold" in fused
+
             summary = await session.read_resource("orchard://system-summary")
             body = summary.contents[0].text
             assert "Zones:            1" in body
             assert "Trees:            1" in body
             assert "Tasks (total):    2" in body
-            assert "KB sources:       0" in body
+            assert "KB sources:       1" in body  # the one added above
             assert "mango: 1" in body
 
             missing = await session.call_tool(

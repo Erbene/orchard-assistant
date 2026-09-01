@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from ..config import Settings
+from ..core.logging import get_logger
 from ..rag.chunking import chunk_text
 from ..rag.extract import UnsupportedFileType, extract_text
 from ..rag.vector_store import OrchardVectorStore
@@ -18,6 +19,7 @@ from ..schemas.source import SourceDetail, SourceRead
 from .exceptions import DomainValidationError, NotFoundError
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_log = get_logger("app.rag")
 
 
 class SourceService:
@@ -55,6 +57,7 @@ class SourceService:
             raise NotFoundError(f"source {source_id} not found")
         self._store.delete_source(source_id)  # drop its chunks from Chroma
         self._sources.delete(source_id)       # FK cascade clears tree_sources
+        _log.info("rag.source.deleted", source_id=source_id)
 
     # -- ingestion ----------------------------------------------
 
@@ -65,6 +68,10 @@ class SourceService:
             name=name.strip(), source_type="text", raw_content=text
         )
         self._embed(row["id"], text)
+        _log.info(
+            "rag.source.ingested",
+            source_id=row["id"], name=row["name"], source_type="text", chars=len(text),
+        )
         return SourceRead.model_validate(row)
 
     async def ingest_file(
@@ -83,6 +90,11 @@ class SourceService:
         path = self._save_upload(row["id"], filename, data)
         self._sources.set_file_path(row["id"], str(path))
         self._embed(row["id"], text)
+        _log.info(
+            "rag.source.ingested",
+            source_id=row["id"], name=row["name"], source_type="file",
+            filename=filename, extracted_chars=len(text),
+        )
         return SourceRead.model_validate({**row, "file_path": str(path)})
 
     # -- tree <-> source links ---------------------------------
@@ -104,6 +116,7 @@ class SourceService:
                 "source_ids", f"unknown source id(s): {missing}"
             )
         self._sources.set_tree_links(tree_id, source_ids)
+        _log.info("rag.source.linked", tree_id=tree_id, source_ids=source_ids)
         return await self.sources_for_tree(tree_id)
 
     def allowed_source_ids(self, tree_id: int) -> list[int]:
@@ -113,7 +126,13 @@ class SourceService:
     # -- helpers ----------------------------------------------
 
     def _embed(self, source_id: int, text: str) -> int:
-        return self._store.add_source_chunks(source_id, chunk_text(text))
+        chunks = chunk_text(text)
+        _log.debug(
+            "rag.embed.start", source_id=source_id, chunks=len(chunks), chars=len(text)
+        )
+        added = self._store.add_source_chunks(source_id, chunks)
+        _log.info("rag.embed.done", source_id=source_id, chunks=added)
+        return added
 
     def _save_upload(self, source_id: int, filename: str, data: bytes) -> Path:
         uploads = Path(self._settings.uploads_dir)
