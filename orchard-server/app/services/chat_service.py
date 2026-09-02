@@ -1,44 +1,68 @@
-"""Stub chat service.
+"""Chat service - runs the Orchestrator graph and yields SSE events.
 
-No language model is wired up. This streams a fixed placeholder reply, token
-by token, so the SSE transport / Next proxy / chat UI can be exercised end to
-end. Replace :meth:`stream_reply` with a real agent loop later - the signature
-(message history in, async iterator of text chunks out) is meant to stay.
+The graph does one classify LLM call, then dispatches: a KB-grounded agronomy
+answer, a bulk task completion, a refusal, small-talk, or a hand-off to the
+``/schedule`` wizard. Ollama is required (the route returns 503 when it's not
+reachable).
 """
 from __future__ import annotations
 
-import asyncio
 import re
 from collections.abc import AsyncIterator, Sequence
 
+from ..config import Settings
+from ..core import db
+from ..core.logging import get_logger
+from ..rag.vector_store import OrchardVectorStore
+from ..repositories.source_repository import SourceRepository
+from ..repositories.task_repository import TaskRepository
+from ..repositories.tree_repository import TreeRepository
 from ..schemas.chat import ChatMessageIn
+from .source_service import SourceService
+from .task_service import TaskService
 
-_STUB_REPLY = (
-    "I'm the orchard assistant. I'm not connected to a language model yet, so "
-    "this is a streamed placeholder. Once a model is wired into "
-    "ChatService.stream_reply I'll be able to read your zones and trees and "
-    "help manage them."
-)
-
-# Seconds between emitted chunks - just enough to see the stream progress.
-_CHUNK_DELAY = 0.02
+_log = get_logger("app.chat")
 
 
-def _chunks(text: str) -> list[str]:
-    """Split into word-ish chunks, keeping trailing whitespace attached so the
-    client can concatenate deltas verbatim."""
-    return re.findall(r"\S+\s*", text)
+def _word_chunks(text: str) -> list[str]:
+    return re.findall(r"\S+\s*", text) or [""]
 
 
 class ChatService:
+    def __init__(self, store: OrchardVectorStore, settings: Settings) -> None:
+        self._store = store
+        self._settings = settings
+
     async def stream_reply(
         self, messages: Sequence[ChatMessageIn]
-    ) -> AsyncIterator[str]:
-        last_user = next(
-            (m.content for m in reversed(messages) if m.role == "user"), ""
-        ).strip()
+    ) -> AsyncIterator[dict]:
+        """Yield event dicts: ``{"type": "tool" | "text-delta" | "redirect", ...}``.
+        The route wraps each as an SSE frame and adds start/finish.
 
-        preamble = f'You asked: "{last_user}"\n\n' if last_user else ""
-        for chunk in _chunks(preamble + _STUB_REPLY):
-            yield chunk
-            await asyncio.sleep(_CHUNK_DELAY)
+        The graph opens its own DB connection for the whole turn - a
+        request-scoped ``Depends`` connection is torn down before this
+        generator runs (FastAPI closes ``yield`` dependencies when the
+        endpoint returns the ``StreamingResponse``, not when it drains)."""
+        from ..agent.graph import build_graph  # lazy: avoids an import cycle
+
+        async with db.connection(self._settings) as conn:
+            sources = SourceService(
+                SourceRepository(conn), TreeRepository(conn), self._store, self._settings
+            )
+            tasks = TaskService(TaskRepository(conn), TreeRepository(conn))
+            graph = build_graph(sources, tasks, self._settings)
+            result = await graph.ainvoke({"messages": list(messages)})
+
+        for call in result.get("tool_calls", []):
+            yield {
+                "type": "tool",
+                "toolName": call["tool"],
+                "args": call["args"],
+                "result": call["result"],
+            }
+        for chunk in _word_chunks(result.get("answer", "")):
+            yield {"type": "text-delta", "delta": chunk}
+        if result.get("redirect"):
+            yield {"type": "redirect", **result["redirect"]}
+
+        _log.info("chat.turn", route=result.get("route"))

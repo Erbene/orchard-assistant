@@ -1,7 +1,9 @@
 "use client";
 
-import { Bot, User } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Bot, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { isHumanApprovalTool, type ApprovalDecision } from "@/lib/agent/tools";
 import type { ChatMessage as ChatMessageT } from "@/lib/chat/types";
 import { ToolCallWidget } from "./tool-call-widget";
@@ -61,6 +63,15 @@ export function ChatMessage({
             <ToolCallWidget key={tc.toolCallId} toolCall={tc} />
           );
         })}
+
+        {message.redirect && (
+          <Button asChild size="sm" variant="outline" className="mt-1">
+            <Link href={message.redirect.href}>
+              {message.redirect.label}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -9,10 +9,10 @@ import { useOrchardChat } from "@/lib/chat/use-orchard-chat";
 import { ChatMessage } from "@/components/chat/chat-message";
 
 const SUGGESTIONS = [
-  "Which zones have unknown soil drainage?",
-  "How old is the oldest mango tree?",
-  "List every tree in the north block",
-  "Summarize what needs attention this week",
+  "Why are my young mango's leaves turning yellow?",
+  "According to my notes, how often should I water a citrus tree?",
+  "Plan my orchard work for this afternoon",
+  "I finished tasks 3 and 5",
 ];
 
 export default function AssistantPage() {
@@ -127,8 +127,7 @@ export default function AssistantPage() {
             )}
           </div>
           <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-            Model <span className="font-medium">stub</span> · streamed from
-            orchard-server over SSE
+            Local model · streamed from orchard-server over SSE
           </p>
         </form>
       </div>
@@ -164,8 +163,8 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
       <div className="space-y-1">
         <h2 className="text-lg font-semibold">How can I help with the orchard?</h2>
         <p className="text-sm text-muted-foreground">
-          Ask about zones and trees. Responses stream from the backend; the model
-          is a stub for now.
+          I answer agronomy questions from your notes, mark tasks done, and open
+          the planner when you want to schedule a work session.
         </p>
       </div>
       <div className="grid w-full gap-2 sm:grid-cols-2">

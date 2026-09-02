@@ -86,6 +86,25 @@ export function useOrchardChat() {
               ...m,
               content: m.content + evt.delta,
             }));
+          } else if (evt.type === "tool") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              toolCalls: [
+                ...(m.toolCalls ?? []),
+                {
+                  toolCallId: uid(),
+                  toolName: evt.toolName,
+                  args: evt.args,
+                  state: "result",
+                  result: evt.result,
+                },
+              ],
+            }));
+          } else if (evt.type === "redirect") {
+            patchAssistant(assistantId, (m) => ({
+              ...m,
+              redirect: { href: evt.href, label: evt.label },
+            }));
           } else if (evt.type === "error") {
             throw new Error(evt.error);
           }

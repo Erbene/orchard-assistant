@@ -41,3 +41,14 @@ class RachioNotConfigured(DomainError):
 
 class RachioError(DomainError):
     """The Rachio API returned an error or was unreachable."""
+
+
+class LLMUnavailable(DomainError):
+    """The local LLM (Ollama) is unreachable and the feature needs it."""
+
+    def __init__(self, message: str | None = None) -> None:
+        super().__init__(
+            message
+            or "The assistant's local language model is unavailable. Start Ollama "
+            "(and pull the model) to use the chat."
+        )

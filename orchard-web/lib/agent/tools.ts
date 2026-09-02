@@ -55,6 +55,11 @@ export const TOOL_PRESENTATION: Record<
     done: "Zone updated",
     impact: "write",
   },
+  mark_tasks_complete: {
+    running: "Marking tasks complete…",
+    done: "Tasks marked complete",
+    impact: "write",
+  },
   deleteZone: {
     running: "Awaiting approval to delete zone…",
     done: "Delete zone",

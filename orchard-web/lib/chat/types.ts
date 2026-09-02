@@ -16,11 +16,18 @@ export interface ChatToolCall {
   result?: unknown;
 }
 
+export interface ChatRedirect {
+  href: string;
+  label: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   toolCalls?: ChatToolCall[];
+  /** Set when the assistant hands off to another page (e.g. the scheduler). */
+  redirect?: ChatRedirect;
 }
 
 /** Wire message sent up to the server (history without client-only fields). */
@@ -32,5 +39,12 @@ export interface ChatMessageWire {
 export type ChatStreamEvent =
   | { type: "start" }
   | { type: "text-delta"; delta: string }
+  | {
+      type: "tool";
+      toolName: string;
+      args: Record<string, unknown>;
+      result: unknown;
+    }
+  | { type: "redirect"; href: string; label: string }
   | { type: "finish"; finishReason: string }
   | { type: "error"; error: string };

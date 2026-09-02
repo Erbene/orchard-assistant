@@ -114,5 +114,11 @@ def get_source_service(
     return SourceService(sources, trees, store, settings)
 
 
-def get_chat_service() -> ChatService:
-    return ChatService()
+def get_chat_service(
+    store: OrchardVectorStore = Depends(get_vector_store_dep),
+    settings: Settings = Depends(get_settings_dep),
+) -> ChatService:
+    # No request-scoped DB connection here: ChatService.stream_reply opens its
+    # own for the turn (a Depends connection is torn down before the
+    # StreamingResponse body is drained).
+    return ChatService(store, settings)

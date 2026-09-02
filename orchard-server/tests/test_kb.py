@@ -130,8 +130,21 @@ def test_consensus_fusion_ranks_by_authority_order(kb):
         assert f"[PRIORITY 1 SOURCE: Guide B (ID: {s2.id})]" in rendered
         assert f"[PRIORITY 2 SOURCE: Guide A (ID: {s1.id})]" in rendered
         assert rendered.index("PRIORITY 1") < rendered.index("PRIORITY 2")
+        assert "General horticultural knowledge" not in rendered   # off by default
+
+        # Agronomist path: general knowledge appended one rank below the last source
+        with_gk = format_priority_context(groups, include_general_knowledge=True)
+        assert "[PRIORITY 3 SOURCE: General horticultural knowledge" in with_gk
+        assert with_gk.index("PRIORITY 2") < with_gk.index("PRIORITY 3")
 
     kb(body)
+
+
+def test_general_knowledge_block_ranks_first_when_no_sources():
+    """With nothing linked, general knowledge is the only block and ranks 1."""
+    rendered = format_priority_context([], include_general_knowledge=True)
+    assert rendered.startswith("[PRIORITY 1 SOURCE: General horticultural knowledge")
+    assert "lowest authority" in rendered
 
 
 def test_reordering_links_repersists_priority(kb):

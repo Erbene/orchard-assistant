@@ -1,22 +1,23 @@
-"""Shared graph state for the orchard scheduling agent."""
+"""Shared state for the Orchestrator graph.
+
+One turn in, one answer out - conversation history arrives in each request
+(the graph is stateless, no checkpointer). The Foreman's multi-turn
+negotiation lives in ``app/agent/foreman.py`` + ``/api/v1/schedule/*``.
+"""
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from collections.abc import Sequence
+from typing import Any, TypedDict
 
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+from .orchestrator import Route
 
 
-class AgentState(TypedDict):
-    """State threaded through every node.
-
-    ``messages`` accumulates (``add_messages`` reducer). The JIT fields below
-    start as ``None`` / empty and are filled in over the conversation - the
-    Foreman node blocks and asks the user whenever ``available_minutes`` is
-    still missing.
-    """
-
-    messages: Annotated[list[BaseMessage], add_messages]
+class OrchestratorState(TypedDict, total=False):
+    messages: Sequence[Any]         # {role, content}-like, newest last
     active_tree_id: int | None
-    available_minutes: int | None
-    confirmed_resources: list[str]
+    route: Route
+    task_ids: list[int]
+    reply: str                     # classifier-supplied text (non-agronomy routes)
+    answer: str                    # final assistant text
+    redirect: dict[str, str] | None   # {"href": "/schedule", "label": "..."}
+    tool_calls: list[dict[str, Any]]  # [{"tool", "args", "result"}]

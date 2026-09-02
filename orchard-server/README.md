@@ -26,7 +26,7 @@ app/
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
   mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
   rag/               chunking, file text extraction, ChromaDB wrapper
-  agent/             LangGraph orchestration skeleton (state / graph / agronomist)
+  agent/             LangGraph agents: Orchestrator (chat router) + Foreman (scheduler)
 docker/postgres/init.sql   the schema (extensions + DDL), run on first container boot
 scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
@@ -146,11 +146,32 @@ case); `tree_id` given → only that tree's linked sources. Also exposes an
 `./chroma`); uploaded files at `ORCHARD_UPLOADS_DIR`. First ingest downloads the
 MiniLM embedding model (~80 MB).
 
-### Agent skeleton (`app/agent/`)
+### Orchestrator — conversational router (`app/agent/`)
 
-`graph.py` — the orchestrator skeleton (routes agronomy vs. scheduling
-questions); still stubs. `agronomist.py` — the Consensus-Fusion prompt +
-`format_priority_context`. The real interactive scheduler is the Foreman ↓.
+[app/agent/orchestrator.py](app/agent/orchestrator.py) is one local-LLM call
+(`AGENT_MODEL`, default `qwen2.5:7b-instruct`, `.with_structured_output`) that
+classifies each chat turn into one of five routes; [graph.py](app/agent/graph.py)
+(async `StateGraph`, no checkpointer — history arrives with every request)
+dispatches it:
+
+| Route | Handler | Effect |
+| ----- | ------- | ------ |
+| `agronomy` | `agronomist.run_agronomist` | KB retrieval → a **second** LLM call → cited answer (the only 2-call turn); general knowledge is folded in as the lowest-priority source, not forbidden |
+| `schedule` | `schedule_handoff` | short reply + a `redirect` event to `/schedule` — the interrupt negotiation never happens in chat |
+| `complete` | `TaskService.mark_many_complete` | marks the named tasks done, emits a `tool` event |
+| `refuse` | reply only | unsafe agronomy (off-label rates, toxic mixes) or out-of-scope (weather, chit-chat, coding) |
+| `smalltalk` | reply only | greeting / "what can you do" |
+
+`agronomist.py` owns the Consensus-Fusion prompt + `format_priority_context`.
+Linked sources are rendered under `[PRIORITY n SOURCE: …]` headers in the
+grower's authority order; `run_agronomist` then appends one more block —
+`[PRIORITY n+1 SOURCE: General horticultural knowledge (…lowest authority)]` —
+so the model's own knowledge fills gaps the notes leave but **never overrides a
+linked source**. The `search_knowledge` MCP tool renders retrieval only (no
+general-knowledge block). The tool surface from chat is **router +
+`mark_tasks_complete` only** — no CRUD.
+**Ollama is required**: `/api/v1/chat` returns **503** when it is unreachable
+(routing cannot be templated). The interactive scheduler is the Foreman ↓.
 
 ### Foreman — interactive JIT scheduling (Phase 4)
 
@@ -190,19 +211,24 @@ DB writes happen **only** on `/complete`, `/report`, or the MCP tool
 ### Chat (SSE)
 
 `POST /api/v1/chat` takes `{ "messages": [{ "role": "user", "content": "…" }] }`
-and streams the reply as Server-Sent Events:
+and streams the Orchestrator turn as Server-Sent Events:
 
 ```
 data: {"type":"start"}
-data: {"type":"text-delta","delta":"Hello "}
-data: {"type":"finish","finishReason":"stub"}
+data: {"type":"tool","toolName":"mark_tasks_complete","args":{"task_ids":[3,5]},"result":[3,5]}
+data: {"type":"text-delta","delta":"Marked "}
+data: {"type":"redirect","href":"/schedule","label":"Open the scheduler"}
+data: {"type":"finish","finishReason":"ok"}
 ```
 
-**No language model is wired up.** [app/services/chat_service.py](app/services/chat_service.py)
-returns a stub reply, token by token, so the transport and the `orchard-web`
-chat UI work end to end. Replace `ChatService.stream_reply` with a real agent
-loop — the signature (message history in, async iterator of text chunks out)
-is meant to stay.
+[app/services/chat_service.py](app/services/chat_service.py) runs the
+Orchestrator graph (see above) and yields these event dicts; the route wraps
+each as an SSE frame and prepends a preflight `GET {OLLAMA_BASE_URL}/api/version`
+— on failure the endpoint returns **503** *before* the stream opens. The
+service opens its **own** DB connection for the turn (a request-scoped
+`Depends` connection is torn down before a `StreamingResponse` body drains).
+`orchard-web` `/assistant` renders the deltas, the completed-tool chip, and the
+"Open the scheduler" button.
 
 ## MCP server
 
@@ -268,6 +294,19 @@ tools return `503` / a tool error and everything else works normally.
 `app/config.py` loads `orchard-server/.env` on bare-metal runs (uvicorn, `python
 -m app.mcp_server`, `dev.ps1`); `docker compose` reads the same file for
 `${RACHIO_API_KEY}`. Real env vars always win over `.env`.
+
+**Local LLM (Ollama).** The Orchestrator/Agronomist need `AGENT_MODEL`
+(default `qwen2.5:7b-instruct`) — `/api/v1/chat` is **503** without a reachable
+Ollama. The Foreman's narration uses `FOREMAN_MODEL` (default `qwen2.5:14b`)
+and is *optional* (templated fallback). `OLLAMA_BASE_URL` defaults to
+`http://localhost:11434` (bare-metal) / `http://host.docker.internal:11434`
+(compose).
+
+```sh
+ollama serve
+ollama pull qwen2.5:7b-instruct     # required for chat
+ollama pull qwen2.5:14b             # optional, Foreman narration
+```
 
 **Full stack in Docker** — Postgres, Chroma, backend, frontend:
 

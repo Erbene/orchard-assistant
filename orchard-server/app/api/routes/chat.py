@@ -1,27 +1,30 @@
-"""Server-Sent Events chat endpoint.
+"""Server-Sent Events chat endpoint - the Orchestrator assistant.
 
-`POST /chat` accepts a message history and streams the assistant reply as SSE
-frames:
+`POST /chat` accepts a message history and streams the assistant turn:
 
     data: {"type":"start"}
+    data: {"type":"tool","toolName":"mark_tasks_complete","args":{...},"result":[3,5]}
+    data: {"type":"text-delta","delta":"Marked "}
+    data: {"type":"redirect","href":"/schedule","label":"Open the scheduler"}
+    data: {"type":"finish","finishReason":"ok"}
 
-    data: {"type":"text-delta","delta":"Hello "}
-
-    data: {"type":"finish","finishReason":"stub"}
-
-The reply is a stub (see ChatService) - no model is called.
+Requires the local LLM (Ollama). If it's unreachable the endpoint returns
+**503** before the stream starts.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
 
+import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ...dependencies import get_chat_service
+from ...config import Settings
+from ...dependencies import get_chat_service, get_settings_dep
 from ...schemas.chat import ChatRequest
 from ...services.chat_service import ChatService
+from ...services.exceptions import LLMUnavailable
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -30,20 +33,35 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+async def _require_ollama(settings: Settings) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            resp = await client.get(f"{settings.ollama_base_url}/api/version")
+            resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        raise LLMUnavailable from exc
+
+
 @router.post("")
 async def chat(
     payload: ChatRequest,
     service: ChatService = Depends(get_chat_service),
+    settings: Settings = Depends(get_settings_dep),
 ) -> StreamingResponse:
+    await _require_ollama(settings)  # -> 503 before the stream opens
+
     async def event_stream() -> AsyncIterator[str]:
         yield _sse({"type": "start"})
         try:
-            async for delta in service.stream_reply(payload.messages):
-                yield _sse({"type": "text-delta", "delta": delta})
+            async for event in service.stream_reply(payload.messages):
+                yield _sse(event)
+        except LLMUnavailable as exc:
+            yield _sse({"type": "error", "error": str(exc)})
+            return
         except Exception as exc:  # noqa: BLE001 - surface as a stream event, not a 500
             yield _sse({"type": "error", "error": str(exc)})
             return
-        yield _sse({"type": "finish", "finishReason": "stub"})
+        yield _sse({"type": "finish", "finishReason": "ok"})
 
     return StreamingResponse(
         event_stream(),
@@ -51,6 +69,6 @@ async def chat(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+            "X-Accel-Buffering": "no",
         },
     )

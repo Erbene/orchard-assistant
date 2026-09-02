@@ -74,17 +74,28 @@ def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_chat_streams_stub_reply(client):
-    r = client.post(
-        f"{API}/chat", json={"messages": [{"role": "user", "content": "hello there"}]}
-    )
+def test_chat_streams_a_routed_reply(client):
+    # LLM mocked: classify -> "smalltalk", ChatService streams the canned reply.
+    from tests.test_agent import fake_llm
+
+    with fake_llm("smalltalk", reply="I help with orchard tasks and your notes."):
+        r = client.post(
+            f"{API}/chat", json={"messages": [{"role": "user", "content": "hi there"}]}
+        )
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
     body = r.text
-    assert '"type":"start"' in body
-    assert '"type":"text-delta"' in body
-    assert '"finishReason":"stub"' in body
-    assert "asked:" in body and "hello" in body
+    assert '"type":"start"' in body and '"type":"text-delta"' in body
+    assert '"finishReason":"ok"' in body
+    # text streams one word per delta frame - reconstruct it
+    import json as _json
+
+    deltas = [
+        _json.loads(line[5:])["delta"]
+        for line in body.splitlines()
+        if line.startswith("data:") and '"text-delta"' in line
+    ]
+    assert "orchard tasks" in "".join(deltas)
 
 
 def test_zones_require_rachio_key(client):

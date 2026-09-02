@@ -120,13 +120,16 @@ class Settings:
     )
     db_echo: bool = field(default_factory=lambda: _bool("DB_ECHO", default=False))
 
-    # Local LLM for the Foreman agent (app/agent/foreman.py) - optional at
-    # runtime; narration falls back to a template when Ollama is unreachable.
+    # Local LLM (Ollama). The Foreman narration is optional (templated
+    # fallback); the Orchestrator / Agronomist REQUIRE it (chat -> 503 without).
     ollama_base_url: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     )
     foreman_model: str = field(
         default_factory=lambda: os.environ.get("FOREMAN_MODEL", "qwen2.5:14b")
+    )
+    agent_model: str = field(
+        default_factory=lambda: os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
     )
 
     # Rachio Smart Irrigation API (app/services/rachio.py) - optional; zone
