@@ -8,6 +8,7 @@ import { isHumanApprovalTool, type ApprovalDecision } from "@/lib/agent/tools";
 import type { ChatMessage as ChatMessageT } from "@/lib/chat/types";
 import { ToolCallWidget } from "./tool-call-widget";
 import { ApprovalCard } from "./approval-card";
+import { ThinkingDots } from "./thinking-dots";
 
 interface ChatMessageProps {
   message: ChatMessageT;
@@ -47,6 +48,12 @@ export function ChatMessage({
         {message.content && (
           <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
         )}
+
+        {!isUser &&
+          !message.content &&
+          !message.toolCalls?.length &&
+          !message.redirect &&
+          busy && <ThinkingDots />}
 
         {message.toolCalls?.map((tc) => {
           const awaitingApproval =

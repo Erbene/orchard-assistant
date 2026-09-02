@@ -56,5 +56,6 @@ class TreeRead(BaseModel):
     notes: str | None = None
     height_m: float | None = None
     canopy_spread_m: float | None = None
+    has_care_plan: bool = False   # only the list endpoint sets this
     age_days: int | None = None
     age_years: float | None = None

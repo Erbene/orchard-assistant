@@ -32,14 +32,20 @@ class TreeRepository:
         clauses: list[str] = []
         params: dict[str, Any] = {}
         if species is not None:
-            clauses.append("species = :species")
+            clauses.append("t.species = :species")
             params["species"] = species
         if zone_id is not None:
-            clauses.append("zone_id = :zone_id")
+            clauses.append("t.zone_id = :zone_id")
             params["zone_id"] = zone_id
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         result = await self._conn.execute(
-            text(f"SELECT * FROM tree{where} ORDER BY tree_id"), params
+            text(
+                "SELECT t.*, EXISTS ("
+                " SELECT 1 FROM task_templates tt WHERE tt.tree_id = t.tree_id"
+                ") AS has_care_plan"
+                f" FROM tree t{where} ORDER BY t.tree_id"
+            ),
+            params,
         )
         return [dict(r) for r in result.mappings().all()]
 

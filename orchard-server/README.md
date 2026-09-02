@@ -160,8 +160,9 @@ Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
 
 `orchard-web`: `/trees/[id]` has a **Care Plan tab** ("Generate Care Plan" +
 auto-run on a new tree, editable templates, canopy dimensions) + a **baseline
-wizard** (dynamic date form). `/schedule` is the **task inbox**; "Plan a work
-session" opens the Foreman JIT wizard in a dialog.
+wizard** (dynamic date form); the `/trees` list has a per-row Care Plan button
+(`GET /trees` returns `has_care_plan`). `/schedule` is the **task inbox**;
+"Plan a work session" opens the Foreman JIT wizard in a dialog.
 
 **Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
 applied once when the `postgres` container's volume is first created (and by

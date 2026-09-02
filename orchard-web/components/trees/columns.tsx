@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Library } from "lucide-react";
+import { ClipboardList, Library } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { RachioZone, Tree } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -85,10 +85,31 @@ export function treeColumns(
             title="Linked sources"
           >
             <Link
-              href={`/trees/${row.original.tree_id}`}
+              href={`/trees/${row.original.tree_id}?tab=sources`}
               aria-label={`Linked sources for tree ${row.original.tree_id}`}
             >
               <Library className="size-4" />
+            </Link>
+          </Button>
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="relative size-8"
+            title={
+              row.original.has_care_plan
+                ? "Edit care plan"
+                : "Generate care plan"
+            }
+          >
+            <Link
+              href={`/trees/${row.original.tree_id}?tab=care-plan`}
+              aria-label={`Care plan for tree ${row.original.tree_id}`}
+            >
+              <ClipboardList className="size-4" />
+              {row.original.has_care_plan && (
+                <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
+              )}
             </Link>
           </Button>
           <RowActions

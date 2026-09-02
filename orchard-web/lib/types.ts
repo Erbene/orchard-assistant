@@ -54,6 +54,8 @@ export interface Tree {
   /** Canopy dimensions (metres) - drive Care Plan resource/time scaling. */
   height_m: number | null;
   canopy_spread_m: number | null;
+  /** True when the tree has at least one care-plan template (list endpoint only). */
+  has_care_plan: boolean;
   age_days: number | null;
   age_years: number | null;
 }
