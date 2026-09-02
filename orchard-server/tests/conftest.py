@@ -39,6 +39,7 @@ TEST_COLLECTION = "orchard_knowledge_test"
 _INIT_SQL = Path(__file__).resolve().parent.parent / "docker" / "postgres" / "init.sql"
 _TABLES = (
     "source_chunks", "tree_sources", "task", "sources", "tree",
+    "chat_message", "conversation",                         # assistant history
     "checkpoint_writes", "checkpoint_blobs", "checkpoints",  # langgraph, when present
 )
 

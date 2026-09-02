@@ -31,17 +31,17 @@ docker/postgres/init.sql   the schema (extensions + DDL), run on first container
 scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
   api/               HTTP LAYER - request/response, status codes, delegation only
-    routes/          zones.py  trees.py  sources.py  chat.py
+    routes/          zones.py trees.py sources.py schedule.py chat.py conversations.py
 
   schemas/           Pydantic transport models (free-text str, no enums)
-    zone.py  tree.py  task.py  source.py  chat.py
+    zone.py  tree.py  task.py  source.py  schedule.py  chat.py  conversation.py
 
   services/          BUSINESS LOGIC - HTTP-agnostic, returns Pydantic/plain objects
-    rachio.py  tree_service.py  task_service.py  source_service.py  chat_service.py
-    validators.py  exceptions.py
+    rachio.py tree_service.py task_service.py source_service.py
+    chat_service.py conversation_service.py foreman_service.py validators.py exceptions.py
 
   repositories/      PERSISTENCE - raw SQL only, dict rows in/out (no zone repo - Rachio)
-    tree_repository.py  task_repository.py  source_repository.py
+    tree_repository.py task_repository.py source_repository.py conversation_repository.py
 ```
 
 **Dependency flow (per request):**
@@ -151,8 +151,8 @@ MiniLM embedding model (~80 MB).
 [app/agent/orchestrator.py](app/agent/orchestrator.py) is one local-LLM call
 (`AGENT_MODEL`, default `qwen2.5:7b-instruct`, `.with_structured_output`) that
 classifies each chat turn into one of five routes; [graph.py](app/agent/graph.py)
-(async `StateGraph`, no checkpointer — history arrives with every request)
-dispatches it:
+(async `StateGraph`, no checkpointer — `ChatService` loads the thread from
+Postgres and passes the whole history in) dispatches it:
 
 | Route | Handler | Effect |
 | ----- | ------- | ------ |
@@ -208,27 +208,44 @@ DB writes happen **only** on `/complete`, `/report`, or the MCP tool
 `mark_tasks_complete(task_ids)` — the schedule itself is a proposal.
 `orchard-web` `/schedule` is the 3-step wizard for this flow.
 
-### Chat (SSE)
+### Chat (SSE) + conversation history
 
-`POST /api/v1/chat` takes `{ "messages": [{ "role": "user", "content": "…" }] }`
-and streams the Orchestrator turn as Server-Sent Events:
+`POST /api/v1/chat` takes `{ "conversation_id"?: int, "message": str }` and
+streams the Orchestrator turn as Server-Sent Events. **History is
+server-owned**: omit `conversation_id` on the first turn — a `conversation`
+row is created and its id comes back in the stream. The server loads prior
+turns from Postgres, runs the graph over the whole thread, then appends the
+user message + the answer.
 
 ```
 data: {"type":"start"}
+data: {"type":"conversation","id":7,"title":"why are my leaves yellow","new":true}
 data: {"type":"tool","toolName":"mark_tasks_complete","args":{"task_ids":[3,5]},"result":[3,5]}
 data: {"type":"text-delta","delta":"Marked "}
 data: {"type":"redirect","href":"/schedule","label":"Open the scheduler"}
 data: {"type":"finish","finishReason":"ok"}
 ```
 
-[app/services/chat_service.py](app/services/chat_service.py) runs the
-Orchestrator graph (see above) and yields these event dicts; the route wraps
-each as an SSE frame and prepends a preflight `GET {OLLAMA_BASE_URL}/api/version`
-— on failure the endpoint returns **503** *before* the stream opens. The
-service opens its **own** DB connection for the turn (a request-scoped
-`Depends` connection is torn down before a `StreamingResponse` body drains).
-`orchard-web` `/assistant` renders the deltas, the completed-tool chip, and the
-"Open the scheduler" button.
+[chat_service.py](app/services/chat_service.py) runs the graph and yields these
+dicts; the route wraps each as an SSE frame and prepends a preflight
+`GET {OLLAMA_BASE_URL}/api/version` — on failure the endpoint returns **503**
+*before* the stream opens. The service opens its **own** DB connection for the
+turn (a request-scoped `Depends` connection is torn down before a
+`StreamingResponse` body drains).
+
+`conversation` / `chat_message` tables (`docker/postgres/init.sql`); the graph
+stays stateless. History CRUD:
+
+| Method | Path | Notes |
+| ------ | ---- | ----- |
+| `GET`    | `/api/v1/conversations` | list, most-recently-updated first |
+| `GET`    | `/api/v1/conversations/{id}` | the thread + every message (`meta` carries route / tool_calls / redirect) |
+| `PATCH`  | `/api/v1/conversations/{id}` | `{title}` — rename |
+| `DELETE` | `/api/v1/conversations/{id}` | 204; messages cascade |
+
+`orchard-web` `/assistant` has a conversation rail (new chat / switch / delete)
+and renders the deltas, the completed-tool chip, and the "Open the scheduler"
+button.
 
 ## MCP server
 

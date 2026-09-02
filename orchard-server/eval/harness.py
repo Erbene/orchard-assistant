@@ -79,6 +79,7 @@ async def provision() -> None:
 
 _RESET_TABLES = (
     "source_chunks", "tree_sources", "task", "sources", "tree",
+    "chat_message", "conversation",
     "checkpoint_writes", "checkpoint_blobs", "checkpoints",
 )
 

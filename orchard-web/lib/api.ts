@@ -5,6 +5,7 @@
  * rewrites them to `${FASTAPI_URL}/api/v1/...`. Non-2xx responses throw
  * {@link ApiError} so form handlers can read `.status` / `.detail` / `.field`.
  */
+import type { Conversation, ConversationDetail } from "./chat/types";
 import type {
   ApiErrorBody,
   RachioDevice,
@@ -194,6 +195,17 @@ export const scheduleApi = {
       thread_id: threadId ?? null,
       text,
     }),
+};
+
+/** Persisted assistant conversations (history sidebar). The turn itself is
+ *  streamed via `/api/chat`; these are the list / read / rename / delete. */
+export const conversationsApi = {
+  list: () => apiClient.get<Conversation[]>(`${API_PREFIX}/conversations`),
+  get: (id: number) =>
+    apiClient.get<ConversationDetail>(`${API_PREFIX}/conversations/${id}`),
+  rename: (id: number, title: string) =>
+    apiClient.patch<Conversation>(`${API_PREFIX}/conversations/${id}`, { title }),
+  remove: (id: number) => apiClient.del(`${API_PREFIX}/conversations/${id}`),
 };
 
 export const sourcesApi = {

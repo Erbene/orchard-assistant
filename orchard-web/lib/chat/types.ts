@@ -30,14 +30,34 @@ export interface ChatMessage {
   redirect?: ChatRedirect;
 }
 
-/** Wire message sent up to the server (history without client-only fields). */
-export interface ChatMessageWire {
+/** A persisted conversation thread (history sidebar). */
+export interface Conversation {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One stored message, as returned by GET /conversations/{id}. */
+export interface StoredChatMessage {
+  id: number;
   role: ChatRole;
   content: string;
+  meta: {
+    route?: string;
+    tool_calls?: { tool: string; args: Record<string, unknown>; result: unknown }[];
+    redirect?: ChatRedirect;
+  };
+  created_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: StoredChatMessage[];
 }
 
 export type ChatStreamEvent =
   | { type: "start" }
+  | { type: "conversation"; id: number; title: string; new: boolean }
   | { type: "text-delta"; delta: string }
   | {
       type: "tool";

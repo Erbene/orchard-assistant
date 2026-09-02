@@ -56,8 +56,11 @@ def _run(body):
     return asyncio.run(_wrap())
 
 
-async def _events(svc: ChatService, text: str) -> list[dict]:
-    return [e async for e in svc.stream_reply([ChatMessageIn(role="user", content=text)])]
+async def _events(svc: ChatService, text: str, *, conversation_id=None) -> list[dict]:
+    return [
+        e
+        async for e in svc.stream_reply(conversation_id=conversation_id, message=text)
+    ]
 
 
 def test_agronomy_route_retrieves_and_answers():
@@ -188,7 +191,7 @@ def test_chat_endpoint_503_when_ollama_down():
     app.dependency_overrides[get_settings_dep] = lambda: settings
     try:
         with TestClient(app) as c:
-            r = c.post("/api/v1/chat", json={"messages": [{"role": "user", "content": "hi"}]})
+            r = c.post("/api/v1/chat", json={"message": "hi"})
             assert r.status_code == 503
     finally:
         app.dependency_overrides.clear()

@@ -1,4 +1,5 @@
 from .chat_service import ChatService
+from .conversation_service import ConversationService
 from .exceptions import (
     ConflictError,
     DomainError,
@@ -14,6 +15,7 @@ from .tree_service import TreeService
 
 __all__ = [
     "ChatService",
+    "ConversationService",
     "ConflictError",
     "DomainError",
     "DomainValidationError",

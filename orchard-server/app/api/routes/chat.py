@@ -1,8 +1,11 @@
 """Server-Sent Events chat endpoint - the Orchestrator assistant.
 
-`POST /chat` accepts a message history and streams the assistant turn:
+`POST /chat` accepts ``{conversation_id?, message}`` and streams the turn.
+History is server-owned: omit ``conversation_id`` on the first turn and read
+the new id from the ``conversation`` event.
 
     data: {"type":"start"}
+    data: {"type":"conversation","id":7,"title":"why are my leaves yellow","new":true}
     data: {"type":"tool","toolName":"mark_tasks_complete","args":{...},"result":[3,5]}
     data: {"type":"text-delta","delta":"Marked "}
     data: {"type":"redirect","href":"/schedule","label":"Open the scheduler"}
@@ -53,7 +56,9 @@ async def chat(
     async def event_stream() -> AsyncIterator[str]:
         yield _sse({"type": "start"})
         try:
-            async for event in service.stream_reply(payload.messages):
+            async for event in service.stream_reply(
+                conversation_id=payload.conversation_id, message=payload.message
+            ):
                 yield _sse(event)
         except LLMUnavailable as exc:
             yield _sse({"type": "error", "error": str(exc)})

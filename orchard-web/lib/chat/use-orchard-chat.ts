@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { conversationsApi } from "@/lib/api";
 import type {
   ChatMessage,
   ChatStreamEvent,
@@ -14,14 +15,20 @@ const uid = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
+interface Options {
+  /** Fired when a turn resolves its conversation (new id, or a fresh title). */
+  onConversation?: (c: { id: number; title: string; isNew: boolean }) => void;
+}
+
 /**
- * Minimal chat hook: POSTs the history to `/api/chat` and consumes the SSE
- * stream, appending `text-delta`s to the trailing assistant message. No
- * external SDK - just fetch + ReadableStream.
+ * Chat hook. History is server-owned: we POST `{ conversation_id, message }`
+ * to `/api/chat` and consume the SSE stream. The `conversation` event carries
+ * the thread id (assigned on the first turn). No external SDK - fetch + stream.
  */
-export function useOrchardChat() {
+export function useOrchardChat({ onConversation }: Options = {}) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [status, setStatus] = React.useState<Status>("ready");
+  const [conversationId, setConversationId] = React.useState<number | null>(null);
   const abortRef = React.useRef<AbortController | null>(null);
 
   const stop = React.useCallback(() => {
@@ -30,11 +37,38 @@ export function useOrchardChat() {
     setStatus("ready");
   }, []);
 
-  const reset = React.useCallback(() => {
+  const newChat = React.useCallback(() => {
     stop();
     setMessages([]);
+    setConversationId(null);
     setStatus("ready");
   }, [stop]);
+
+  /** Load a past thread into the view. */
+  const loadConversation = React.useCallback(
+    async (id: number) => {
+      stop();
+      const detail = await conversationsApi.get(id);
+      setConversationId(detail.id);
+      setMessages(
+        detail.messages.map((m): ChatMessage => ({
+          id: String(m.id),
+          role: m.role,
+          content: m.content,
+          toolCalls: m.meta.tool_calls?.map((tc): ChatToolCall => ({
+            toolCallId: uid(),
+            toolName: tc.tool,
+            args: tc.args,
+            state: "result",
+            result: tc.result,
+          })),
+          redirect: m.meta.redirect,
+        })),
+      );
+      setStatus("ready");
+    },
+    [stop],
+  );
 
   const patchAssistant = React.useCallback(
     (id: string, fn: (m: ChatMessage) => ChatMessage) => {
@@ -50,10 +84,6 @@ export function useOrchardChat() {
 
       const userMsg: ChatMessage = { id: uid(), role: "user", content: trimmed };
       const assistantId = uid();
-      const history = [...messages, userMsg].map(({ role, content }) => ({
-        role,
-        content,
-      }));
 
       setMessages((prev) => [
         ...prev,
@@ -69,7 +99,10 @@ export function useOrchardChat() {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ messages: history }),
+          body: JSON.stringify({
+            conversation_id: conversationId,
+            message: trimmed,
+          }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
@@ -81,7 +114,10 @@ export function useOrchardChat() {
         let buffer = "";
 
         const apply = (evt: ChatStreamEvent) => {
-          if (evt.type === "text-delta") {
+          if (evt.type === "conversation") {
+            setConversationId(evt.id);
+            onConversation?.({ id: evt.id, title: evt.title, isNew: evt.new });
+          } else if (evt.type === "text-delta") {
             patchAssistant(assistantId, (m) => ({
               ...m,
               content: m.content + evt.delta,
@@ -140,7 +176,7 @@ export function useOrchardChat() {
         abortRef.current = null;
       }
     },
-    [messages, status, patchAssistant],
+    [conversationId, status, patchAssistant, onConversation],
   );
 
   /** Resolve a rendered tool call (used by the HITL approval card). */
@@ -160,5 +196,14 @@ export function useOrchardChat() {
     [],
   );
 
-  return { messages, status, send, stop, reset, resolveToolCall };
+  return {
+    messages,
+    status,
+    conversationId,
+    send,
+    stop,
+    newChat,
+    loadConversation,
+    resolveToolCall,
+  };
 }

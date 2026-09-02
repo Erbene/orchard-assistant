@@ -1,12 +1,23 @@
 "use client";
 
 import * as React from "react";
-import { Bot, Paperclip, SendHorizonal, Square } from "lucide-react";
+import {
+  Bot,
+  PanelLeft,
+  Paperclip,
+  Plus,
+  SendHorizonal,
+  Square,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { APPROVAL, type ApprovalDecision } from "@/lib/agent/tools";
 import { useOrchardChat } from "@/lib/chat/use-orchard-chat";
 import { ChatMessage } from "@/components/chat/chat-message";
+import {
+  ConversationRail,
+  type ConversationRailHandle,
+} from "@/components/chat/conversation-rail";
 
 const SUGGESTIONS = [
   "Why are my young mango's leaves turning yellow?",
@@ -16,8 +27,19 @@ const SUGGESTIONS = [
 ];
 
 export default function AssistantPage() {
-  const { messages, status, send, stop, resolveToolCall } = useOrchardChat();
+  const railRef = React.useRef<ConversationRailHandle>(null);
+  const {
+    messages,
+    status,
+    conversationId,
+    send,
+    stop,
+    newChat,
+    loadConversation,
+    resolveToolCall,
+  } = useOrchardChat({ onConversation: () => railRef.current?.refresh() });
   const [input, setInput] = React.useState("");
+  const [railOpen, setRailOpen] = React.useState(false);
   const busy = status === "streaming";
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -35,6 +57,16 @@ export default function AssistantPage() {
     setInput("");
   };
 
+  const pickConversation = (id: number) => {
+    void loadConversation(id);
+    setRailOpen(false);
+  };
+
+  const startNew = () => {
+    newChat();
+    setRailOpen(false);
+  };
+
   const onToolDecision = (id: string, decision: ApprovalDecision) =>
     resolveToolCall(
       id,
@@ -42,94 +74,143 @@ export default function AssistantPage() {
     );
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b px-4 py-3">
-        <span className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground">
-          <Bot className="size-4" />
-        </span>
-        <h1 className="flex-1 text-sm font-semibold">Assistant</h1>
-        <StatusIndicator status={status} />
-      </header>
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          {messages.length === 0 ? (
-            <EmptyState onPick={(s) => void send(s)} />
-          ) : (
-            <div className="space-y-6">
-              {messages.map((message) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  busy={busy}
-                  onToolDecision={onToolDecision}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+    <div className="flex h-full">
+      {/* history rail - persistent on md+, slide-over on mobile */}
+      <div className="hidden md:flex">
+        <ConversationRail
+          ref={railRef}
+          activeId={conversationId}
+          onSelect={pickConversation}
+          onNew={startNew}
+        />
       </div>
+      {railOpen && (
+        <div className="fixed inset-0 z-30 flex md:hidden">
+          <ConversationRail
+            ref={railRef}
+            activeId={conversationId}
+            onSelect={pickConversation}
+            onNew={startNew}
+          />
+          <button
+            type="button"
+            aria-label="Close history"
+            className="flex-1 bg-black/30"
+            onClick={() => setRailOpen(false)}
+          />
+        </div>
+      )}
 
-      <div className="border-t bg-background">
-        <form
-          className="mx-auto max-w-3xl px-4 py-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            doSend();
-          }}
-        >
-          <div className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-ring">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="shrink-0"
-              aria-label="Attach file (coming soon)"
-              disabled
-            >
-              <Paperclip className="size-4" />
-            </Button>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  doSend();
-                }
-              }}
-              rows={1}
-              placeholder="Message the orchard assistant…"
-              aria-label="Message the orchard assistant"
-              className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground"
-            />
-            {busy ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="outline"
-                className="shrink-0"
-                onClick={stop}
-                aria-label="Stop generating"
-              >
-                <Square className="size-4" />
-              </Button>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-2 border-b px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="md:hidden"
+            aria-label="Conversation history"
+            onClick={() => setRailOpen(true)}
+          >
+            <PanelLeft className="size-4" />
+          </Button>
+          <span className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <Bot className="size-4" />
+          </span>
+          <h1 className="flex-1 text-sm font-semibold">Assistant</h1>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            onClick={startNew}
+            disabled={messages.length === 0 && conversationId === null}
+          >
+            <Plus className="size-4" />
+            New
+          </Button>
+          <StatusIndicator status={status} />
+        </header>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl px-4 py-6">
+            {messages.length === 0 ? (
+              <EmptyState onPick={(s) => void send(s)} />
             ) : (
-              <Button
-                type="submit"
-                size="icon"
-                className="shrink-0"
-                disabled={!input.trim()}
-                aria-label="Send message"
-              >
-                <SendHorizonal className="size-4" />
-              </Button>
+              <div className="space-y-6">
+                {messages.map((message) => (
+                  <ChatMessage
+                    key={message.id}
+                    message={message}
+                    busy={busy}
+                    onToolDecision={onToolDecision}
+                  />
+                ))}
+              </div>
             )}
           </div>
-          <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
-            Local model · streamed from orchard-server over SSE
-          </p>
-        </form>
+        </div>
+
+        <div className="border-t bg-background">
+          <form
+            className="mx-auto max-w-3xl px-4 py-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              doSend();
+            }}
+          >
+            <div className="flex items-end gap-1.5 rounded-2xl border bg-card p-1.5 shadow-sm focus-within:ring-2 focus-within:ring-ring">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="shrink-0"
+                aria-label="Attach file (coming soon)"
+                disabled
+              >
+                <Paperclip className="size-4" />
+              </Button>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    doSend();
+                  }
+                }}
+                rows={1}
+                placeholder="Message the orchard assistant…"
+                aria-label="Message the orchard assistant"
+                className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground"
+              />
+              {busy ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={stop}
+                  aria-label="Stop generating"
+                >
+                  <Square className="size-4" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="shrink-0"
+                  disabled={!input.trim()}
+                  aria-label="Send message"
+                >
+                  <SendHorizonal className="size-4" />
+                </Button>
+              )}
+            </div>
+            <p className="mt-1.5 text-center text-[11px] text-muted-foreground">
+              Local model · streamed from orchard-server over SSE
+            </p>
+          </form>
+        </div>
       </div>
     </div>
   );

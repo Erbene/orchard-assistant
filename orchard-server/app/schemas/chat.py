@@ -1,8 +1,9 @@
 """Chat transport models.
 
-Deliberately minimal - no model/provider config lives here. The chat endpoint
-streams a stub reply today; these shapes are what a real agent loop would also
-consume.
+The server owns conversation history: a turn is just ``{conversation_id?,
+message}``. The server loads prior turns from Postgres, runs the Orchestrator
+graph over the whole thread, and appends the user message + the answer.
+``ChatMessageIn`` is the internal {role, content} shape the graph consumes.
 """
 from __future__ import annotations
 
@@ -17,4 +18,5 @@ class ChatMessageIn(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessageIn] = Field(min_length=1)
+    conversation_id: int | None = None
+    message: str = Field(min_length=1)

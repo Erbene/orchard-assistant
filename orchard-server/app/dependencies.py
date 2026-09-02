@@ -21,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from .config import Settings, get_settings
 from .core import db
 from .rag.vector_store import OrchardVectorStore, get_vector_store
+from .repositories.conversation_repository import ConversationRepository
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
 from .agent.checkpointer import ensure_foreman_graph
 from .services.chat_service import ChatService
 from .services.foreman_service import ForemanService
+from .services.conversation_service import ConversationService
 from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.task_service import TaskService
@@ -57,6 +59,12 @@ def get_task_repository(conn: AsyncConnection = Depends(get_connection)) -> Task
 
 def get_source_repository(conn: AsyncConnection = Depends(get_connection)) -> SourceRepository:
     return SourceRepository(conn)
+
+
+def get_conversation_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> ConversationRepository:
+    return ConversationRepository(conn)
 
 
 # -- vector store (process singleton per Settings) --------------------
@@ -112,6 +120,12 @@ def get_source_service(
     settings: Settings = Depends(get_settings_dep),
 ) -> SourceService:
     return SourceService(sources, trees, store, settings)
+
+
+def get_conversation_service(
+    conversations: ConversationRepository = Depends(get_conversation_repository),
+) -> ConversationService:
+    return ConversationService(conversations)
 
 
 def get_chat_service(

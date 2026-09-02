@@ -79,13 +79,12 @@ def test_chat_streams_a_routed_reply(client):
     from tests.test_agent import fake_llm
 
     with fake_llm("smalltalk", reply="I help with orchard tasks and your notes."):
-        r = client.post(
-            f"{API}/chat", json={"messages": [{"role": "user", "content": "hi there"}]}
-        )
+        r = client.post(f"{API}/chat", json={"message": "hi there"})
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
     body = r.text
     assert '"type":"start"' in body and '"type":"text-delta"' in body
+    assert '"type":"conversation"' in body and '"new":true' in body
     assert '"finishReason":"ok"' in body
     # text streams one word per delta frame - reconstruct it
     import json as _json
