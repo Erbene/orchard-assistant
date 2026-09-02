@@ -28,9 +28,11 @@ _MUTABLE = (
     "estimated_minutes",
     "required_resources",
     "completed_at",
+    "template_id",
 )
 _INSERTABLE = (
     "tree_id",
+    "template_id",
     "action_type",
     "status",
     "priority_score",
@@ -141,3 +143,53 @@ class TaskRepository:
             text("DELETE FROM task WHERE id = :id"), {"id": task_id}
         )
         return result.rowcount > 0
+
+    # -- Care Plan support ------------------------------------------
+
+    async def open_for_template(self, template_id: int) -> Row | None:
+        """The single non-closed (pending/deferred) task for a template, if any."""
+        result = await self._conn.execute(
+            text(
+                "SELECT * FROM task WHERE template_id = :tid"
+                " AND status IN ('pending', 'deferred')"
+                " ORDER BY id DESC LIMIT 1"
+            ),
+            {"tid": template_id},
+        )
+        row = result.mappings().first()
+        return _decode(dict(row)) if row is not None else None
+
+    async def delete_open_for_template(self, template_id: int) -> None:
+        await self._conn.execute(
+            text(
+                "DELETE FROM task WHERE template_id = :tid"
+                " AND status IN ('pending', 'deferred')"
+            ),
+            {"tid": template_id},
+        )
+
+    async def inbox(self) -> list[Row]:
+        """Pending tasks for the schedule inbox, joined to their template for
+        display (category / plan name / computed resource amounts)."""
+        result = await self._conn.execute(
+            text(
+                "SELECT t.*, tt.name AS template_name, tt.category AS template_category,"
+                " tt.resource_plan AS template_resource_plan,"
+                " tr.species AS tree_species, tr.variety AS tree_variety"
+                " FROM task t"
+                " LEFT JOIN task_templates tt ON tt.id = t.template_id"
+                " JOIN tree tr ON tr.tree_id = t.tree_id"
+                " WHERE t.status = 'pending'"
+                " ORDER BY t.priority_score DESC,"
+                " t.scheduled_date IS NULL, t.scheduled_date ASC, t.id ASC"
+            )
+        )
+        rows: list[Row] = []
+        for r in result.mappings().all():
+            row = _decode(dict(r))
+            rp = row.get("template_resource_plan")
+            row["template_resource_plan"] = (
+                json.loads(rp) if isinstance(rp, str) else (rp or [])
+            )
+            rows.append(row)
+        return rows

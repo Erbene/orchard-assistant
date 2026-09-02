@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TaskStatus = Literal["pending", "completed", "deferred"]
+TaskStatus = Literal["pending", "completed", "deferred", "skipped"]
 
 
 class TaskBase(BaseModel):
@@ -92,6 +92,24 @@ class TaskRead(TaskBase):
 
     id: int
     tree_id: int
+    template_id: int | None = None
     status: TaskStatus
     created_at: datetime
     completed_at: datetime | None = None
+
+
+class InboxResourceLine(BaseModel):
+    name: str
+    quantity: float
+    unit: str
+
+
+class InboxTaskRead(TaskRead):
+    """A pending task enriched for the schedule inbox with its template +
+    tree labels and the computed resource amounts."""
+
+    template_name: str | None = None
+    template_category: str | None = None
+    template_resource_plan: list[InboxResourceLine] = Field(default_factory=list)
+    tree_species: str
+    tree_variety: str

@@ -31,17 +31,17 @@ docker/postgres/init.sql   the schema (extensions + DDL), run on first container
 scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
   api/               HTTP LAYER - request/response, status codes, delegation only
-    routes/          zones.py trees.py sources.py schedule.py chat.py conversations.py
+    routes/          zones trees sources schedule chat conversations care_plan tasks
 
   schemas/           Pydantic transport models (free-text str, no enums)
-    zone.py  tree.py  task.py  source.py  schedule.py  chat.py  conversation.py
+    zone tree task source schedule chat conversation care_plan
 
   services/          BUSINESS LOGIC - HTTP-agnostic, returns Pydantic/plain objects
-    rachio.py tree_service.py task_service.py source_service.py
-    chat_service.py conversation_service.py foreman_service.py validators.py exceptions.py
+    rachio tree_service task_service source_service chat_service
+    conversation_service care_plan_service foreman_service validators exceptions
 
   repositories/      PERSISTENCE - raw SQL only, dict rows in/out (no zone repo - Rachio)
-    tree_repository.py task_repository.py source_repository.py conversation_repository.py
+    tree_repository task_repository task_template_repository source_repository conversation_repository
 ```
 
 **Dependency flow (per request):**
@@ -110,19 +110,58 @@ the Foreman's `/api/v1/schedule/*` routes. `user_context` was **dropped** —
 scheduling constraints (available minutes, resources) are gathered *just in
 time* by the Foreman, not stored.
 
-- `task`: `id`, `tree_id`, `action_type` (free text), `status`
-  (`pending`/`completed`/`deferred` — a real state field, so it *is*
+- `task`: `id`, `tree_id`, **`template_id`** (FK → `task_templates`, `ON DELETE
+  SET NULL`), `action_type` (free text), `status`
+  (`pending`/`completed`/`deferred`/`skipped` — a real state field, so it *is*
   constrained), `priority_score` (float), `scheduled_date` (ISO datetime, nullable),
-  `frequency_days` (int, nullable — set = recurring), **`estimated_minutes`**
-  (int, nullable), **`required_resources`** (JSON list of free-text names),
-  `created_at`, `completed_at`.
-- `TaskService`: `create_task` (FK-checked), `mark_complete` (stamps
-  `completed_at`, spawns the next occurrence — carries minutes + resources
-  forward), `defer_task`, `batch_update_priorities` (atomic),
-  `create_baseline_tasks(tree_id, items)` — items are **LLM-supplied** and each
-  MUST carry `estimated_minutes` + `required_resources`.
+  `frequency_days` (int, nullable), **`estimated_minutes`** (int, nullable),
+  **`required_resources`** (JSON list of free-text names), `created_at`,
+  `completed_at`.
+- `TaskService`: `create_task` (FK-checked), `mark_complete` / `skip_task`
+  (both close the task then spawn the template's next occurrence — or, for a
+  template-less task, honour `frequency_days`), `defer_task`,
+  `batch_update_priorities` (atomic), `create_baseline_tasks(tree_id, items)`.
 - `TaskRepository.list_pending(scheduled_before=…)` — pending only, `priority_score`
-  DESC; the date filter keeps due-by tasks plus unscheduled ones.
+  DESC; `.inbox()` — pending tasks joined to their template + tree for the
+  `/api/v1/tasks` list.
+
+### Care Plan & task generation
+
+Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
+`category`, `rate_class`, `interval_days`, `estimated_minutes`, `priority_score`,
+`required_resources` list[str], `resource_plan` list[{name,quantity,unit}],
+`baseline_question?`, `anchor_date?`, `source_ids`). `tree` gained `height_m` /
+`canopy_spread_m`.
+
+- **[app/agent/care_plan.py](app/agent/care_plan.py)** — the *deterministic*
+  size-scaler. `canopy_volume_m3(height, spread)` (half-ellipsoid; spread ≈
+  0.6·height when unknown) feeds a `_RATES` table (`base_minutes` +
+  `minutes_per_m³`, consumables per m³, a `Pole saw` past 3 m). The LLM never
+  does the arithmetic — see the eval decision log.
+- **`agronomist.generate_care_plan(tree, …)`** — `AGENT_MODEL` (7B) picks 4–9
+  `_PlanItem`s (`name`, `category` enum, `rate_class`, `interval_days`,
+  `priority_score`, optional `baseline_question`); Python scales each to a
+  template row. Raises `LLMUnavailable` → **503** when Ollama is down.
+- **`CarePlanService`** — `generate` (replace templates, drop their *pending*
+  tasks), `update_template` (re-scale on `category`/`rate_class` change, resync
+  the one open task), `delete_template`, `apply_baseline` (answers → per-template
+  `anchor_date` → materialise the first task, `anchor + interval_days`).
+- **Recurrence = one open task per template.** `mark_complete`/`skip_task`
+  spawns the next (`prev.scheduled_date + interval_days`).
+
+| Method | Path | Notes |
+| ------ | ---- | ----- |
+| `GET`    | `/api/v1/trees/{id}/care-plan` | templates + baseline questions + counts |
+| `POST`   | `/api/v1/trees/{id}/care-plan/generate` | run the Agronomist, replace the plan (503 without Ollama) |
+| `POST`   | `/api/v1/trees/{id}/care-plan/baseline` | `{answers:[{template_id,last_done}]}` → first tasks |
+| `PATCH`/`DELETE` | `/api/v1/care-plan/templates/{id}` | edit / remove a template (+ its open task) |
+| `GET` | `/api/v1/tasks` | the schedule inbox — pending, priority-then-date, with plan/tree labels |
+| `POST` | `/api/v1/tasks/{id}/complete` · `/skip` · `/defer` | close out a task |
+
+`orchard-web`: `/trees/[id]` has a **Care Plan tab** ("Generate Care Plan" +
+auto-run on a new tree, editable templates, canopy dimensions) + a **baseline
+wizard** (dynamic date form). `/schedule` is the **task inbox**; "Plan a work
+session" opens the Foreman JIT wizard in a dialog.
 
 **Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
 applied once when the `postgres` container's volume is first created (and by
@@ -427,6 +466,13 @@ and compare. Named snapshots referenced here are kept in
   4. *"Add a new Kent mango in zone rz-3"* → `agronomy` + growing advice. Fix:
      tree / source CRUD is `refuse` + a pointer to the Trees / Sources pages
      (chat's tool surface is deliberately router + `mark_tasks_complete` only).
+- **2026-09-02 — Care Plan: LLM picks, Python scales.** The Agronomist chooses
+  the task list, `category` and a `rate_class`; `app/agent/care_plan.py` derives
+  every number (minutes, fertilizer kg, compost L) from canopy volume via a
+  fixed rates table. Rationale: the eval showed 7B unreliable/inconsistent at
+  dosing math, and a care plan that drives real fertiliser amounts must be
+  reproducible and explainable. Revisit if the rates table proves too coarse
+  for real orchard blocks.
 - **2026-09-02 — Agronomist model experiment.** Reading the 7B vs 14B answers
   side by side: 14B was marginally tidier and more conservative (declined to
   give an avocado N-dose from general knowledge where 7B gave a number); 7B was

@@ -10,8 +10,10 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from ..repositories.task_repository import TaskRepository
+from ..repositories.task_template_repository import TaskTemplateRepository
 from ..repositories.tree_repository import TreeRepository
 from ..schemas.task import (
+    InboxTaskRead,
     TaskBaselineItem,
     TaskCreate,
     TaskPriorityUpdate,
@@ -26,9 +28,15 @@ def _now() -> datetime:
 
 
 class TaskService:
-    def __init__(self, tasks: TaskRepository, trees: TreeRepository) -> None:
+    def __init__(
+        self,
+        tasks: TaskRepository,
+        trees: TreeRepository,
+        templates: TaskTemplateRepository | None = None,
+    ) -> None:
         self._tasks = tasks
         self._trees = trees
+        self._templates = templates
 
     # -- reads --------------------------------------------------------
 
@@ -53,6 +61,11 @@ class TaskService:
             scheduled_before=scheduled_before.date() if scheduled_before else None
         )
         return [TaskRead.model_validate(r) for r in rows]
+
+    async def inbox(self) -> list[InboxTaskRead]:
+        """The schedule inbox: pending tasks + template/tree labels + amounts,
+        priority-then-date ordered."""
+        return [InboxTaskRead.model_validate(r) for r in await self._tasks.inbox()]
 
     # -- writes -----------------------------------------------------
 
@@ -99,33 +112,59 @@ class TaskService:
             raise NotFoundError(f"task {task_id} not found")
 
     async def mark_complete(self, task_id: int) -> TaskRead:
-        """Mark a task ``completed``. If it recurs, spawn the next occurrence."""
+        """Mark a task ``completed``, then spawn the next occurrence if it
+        belongs to a Care Plan template (or has a bare ``frequency_days``)."""
+        return await self._close_and_respawn(task_id, "completed")
+
+    async def skip_task(self, task_id: int) -> TaskRead:
+        """Mark a task ``skipped`` (done nothing, don't do it) and still advance
+        the recurrence so the plan keeps rolling."""
+        return await self._close_and_respawn(task_id, "skipped")
+
+    async def _close_and_respawn(self, task_id: int, status: str) -> TaskRead:
         current = await self._tasks.get(task_id)
         if current is None:
             raise NotFoundError(f"task {task_id} not found")
-        if current["status"] == "completed":
+        if current["status"] in ("completed", "skipped"):
             return TaskRead.model_validate(current)
 
-        row = await self._tasks.update(
-            task_id, {"status": "completed", "completed_at": _now()}
-        )
-        completed = TaskRead.model_validate(row)
+        patch: dict[str, object] = {"status": status}
+        if status == "completed":
+            patch["completed_at"] = _now()
+        closed = TaskRead.model_validate(await self._tasks.update(task_id, patch))
 
-        if completed.frequency_days:
-            anchor = completed.scheduled_date or datetime.now(timezone.utc)
+        base = closed.scheduled_date or datetime.now(timezone.utc)
+        template = None
+        if closed.template_id and self._templates is not None:
+            template = await self._templates.get(closed.template_id)
+
+        if template is not None:
             await self._tasks.create(
                 {
-                    "tree_id": completed.tree_id,
-                    "action_type": completed.action_type,
+                    "tree_id": closed.tree_id,
+                    "template_id": template["id"],
+                    "action_type": template["name"],
                     "status": "pending",
-                    "priority_score": completed.priority_score,
-                    "scheduled_date": anchor + timedelta(days=completed.frequency_days),
-                    "frequency_days": completed.frequency_days,
-                    "estimated_minutes": completed.estimated_minutes,
-                    "required_resources": completed.required_resources,
+                    "priority_score": template["priority_score"],
+                    "scheduled_date": base + timedelta(days=template["interval_days"]),
+                    "estimated_minutes": template["estimated_minutes"],
+                    "required_resources": template["required_resources"],
                 }
             )
-        return completed
+        elif closed.frequency_days:
+            await self._tasks.create(
+                {
+                    "tree_id": closed.tree_id,
+                    "action_type": closed.action_type,
+                    "status": "pending",
+                    "priority_score": closed.priority_score,
+                    "scheduled_date": base + timedelta(days=closed.frequency_days),
+                    "frequency_days": closed.frequency_days,
+                    "estimated_minutes": closed.estimated_minutes,
+                    "required_resources": closed.required_resources,
+                }
+            )
+        return closed
 
     async def mark_many_complete(self, task_ids: Sequence[int]) -> list[TaskRead]:
         """Complete several tasks at once (the Foreman's write path). Unknown or

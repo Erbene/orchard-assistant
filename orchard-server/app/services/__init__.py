@@ -1,3 +1,4 @@
+from .care_plan_service import CarePlanService
 from .chat_service import ChatService
 from .conversation_service import ConversationService
 from .exceptions import (
@@ -14,6 +15,7 @@ from .task_service import TaskService
 from .tree_service import TreeService
 
 __all__ = [
+    "CarePlanService",
     "ChatService",
     "ConversationService",
     "ConflictError",

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +22,7 @@ import type { RachioZone, Tree } from "@/lib/types";
 
 export default function TreesPage() {
   const toast = useToast();
+  const router = useRouter();
   const [trees, setTrees] = React.useState<Tree[]>([]);
   const [zones, setZones] = React.useState<RachioZone[]>([]);
   const [zoneOptions, setZoneOptions] = React.useState<ZoneOption[]>([]);
@@ -125,10 +127,15 @@ export default function TreesPage() {
             zoneOptions={zoneOptions}
             tree={editing}
             onCancel={() => setFormOpen(false)}
-            onSaved={() => {
+            onSaved={(saved) => {
+              const wasCreate = !editing;
               setFormOpen(false);
               setEditing(null);
               void refresh();
+              if (wasCreate) {
+                // land on the new tree's Care Plan tab and auto-generate
+                router.push(`/trees/${saved.tree_id}?tab=care-plan&autogen=1`);
+              }
             }}
           />
         </DialogContent>

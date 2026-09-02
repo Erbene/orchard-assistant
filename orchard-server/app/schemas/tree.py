@@ -11,6 +11,10 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict, Field
 
 
+_HEIGHT = Field(default=None, gt=0, le=99, description="Canopy height in metres (Care Plan scaling).")
+_SPREAD = Field(default=None, gt=0, le=99, description="Canopy spread in metres; defaults to 0.6 * height.")
+
+
 class TreeCreate(BaseModel):
     species: str = Field(min_length=1, description="Free text, e.g. 'mango'.")
     variety: str = Field(min_length=1, description="Free text, e.g. 'Kent'.")
@@ -20,6 +24,8 @@ class TreeCreate(BaseModel):
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None
+    height_m: float | None = _HEIGHT
+    canopy_spread_m: float | None = _SPREAD
     tree_id: int | None = Field(default=None, gt=0, description="Optional; assigned by the store when omitted.")
 
 
@@ -34,6 +40,8 @@ class TreeUpdate(BaseModel):
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None
+    height_m: float | None = _HEIGHT
+    canopy_spread_m: float | None = _SPREAD
 
 
 class TreeRead(BaseModel):
@@ -46,5 +54,7 @@ class TreeRead(BaseModel):
     planted_date: date | None = None
     additional_context: str | None = None
     notes: str | None = None
+    height_m: float | None = None
+    canopy_spread_m: float | None = None
     age_days: int | None = None
     age_years: float | None = None

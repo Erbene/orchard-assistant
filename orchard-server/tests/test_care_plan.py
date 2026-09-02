@@ -1,0 +1,298 @@
+"""Care Plan engine: the deterministic size-scaling, the Agronomist draft
+(LLM mocked), and the full generate -> baseline -> recurring-task flow against
+``orchard_test``."""
+from __future__ import annotations
+
+import asyncio
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from app.agent import care_plan as cp
+from app.agent.agronomist import _CarePlanModel, _PlanItem
+from app.core import db
+from app.dependencies import get_settings_dep
+from app.main import app
+from app.repositories.source_repository import SourceRepository
+from app.repositories.task_repository import TaskRepository
+from app.repositories.task_template_repository import TaskTemplateRepository
+from app.repositories.tree_repository import TreeRepository
+from app.schemas.care_plan import BaselineAnswer, TaskTemplateUpdate
+from app.services.care_plan_service import CarePlanService
+from app.services.source_service import SourceService
+from app.services.task_service import TaskService
+from app.rag.vector_store import get_vector_store
+
+from conftest import stack_settings
+
+
+# --------------------------------------------------------------------------
+# 1. deterministic engine - no DB, no model
+# --------------------------------------------------------------------------
+
+def test_canopy_volume_scales_with_size():
+    small = cp.canopy_volume_m3(1.0, None)
+    big = cp.canopy_volume_m3(4.0, None)
+    assert big > small * 10          # volume ~ h^3 (spread tracks height)
+    assert cp.canopy_volume_m3(None, None) == pytest.approx(
+        cp.canopy_volume_m3(2.0, None)
+    )                                # default height when unrecorded
+    assert cp.canopy_volume_m3(0.0, None) > 0     # clamped, never zero
+
+
+def test_scale_is_deterministic_and_size_aware():
+    a = cp.scale("fertilize", "standard", height_m=2.0, spread_m=None)
+    b = cp.scale("fertilize", "standard", height_m=2.0, spread_m=None)
+    assert a == b                                        # pure
+
+    big = cp.scale("fertilize", "standard", height_m=5.0, spread_m=None)
+    assert big.estimated_minutes > a.estimated_minutes
+    fert_a = next(r for r in a.resource_plan if "fertilizer" in r.name.lower())
+    fert_big = next(r for r in big.resource_plan if "fertilizer" in r.name.lower())
+    assert fert_big.quantity > fert_a.quantity
+
+    heavy = cp.scale("fertilize", "heavy", height_m=2.0, spread_m=None)
+    assert heavy.resource_plan[0].quantity > a.resource_plan[0].quantity
+
+
+def test_scale_adds_pole_saw_for_tall_trees():
+    short = cp.scale("prune", "standard", height_m=2.0, spread_m=None)
+    tall = cp.scale("prune", "standard", height_m=4.0, spread_m=None)
+    assert "Pole saw" not in short.required_resources
+    assert "Pole saw" in tall.required_resources
+
+
+def test_scale_minutes_snap_to_five():
+    for cat in cp.CATEGORIES:
+        s = cp.scale(cat, "standard", height_m=3.0, spread_m=2.0)
+        assert s.estimated_minutes % 5 == 0 and s.estimated_minutes >= 5
+
+
+# --------------------------------------------------------------------------
+# 2. service flow - LLM mocked
+# --------------------------------------------------------------------------
+
+_DRAFT = _CarePlanModel(items=[
+    _PlanItem(name="Nitrogen feed", category="fertilize", rate_class="standard",
+              interval_days=90, priority_score=6.0,
+              baseline_question="When did you last fertilize?"),
+    _PlanItem(name="Structural prune", category="prune", rate_class="light",
+              interval_days=365, priority_score=4.0),
+    _PlanItem(name="Pest scouting", category="scout", rate_class="standard",
+              interval_days=30, priority_score=3.0),
+])
+
+
+@contextmanager
+def fake_plan_llm(draft: _CarePlanModel = _DRAFT):
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(return_value=draft)
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=structured)
+    with patch("app.agent.agronomist.ChatOllama", return_value=llm):
+        yield
+
+
+def _run(body):
+    settings = stack_settings()
+
+    async def _wrap():
+        try:
+            get_vector_store(settings).clear()
+            async with db.connection(settings) as conn:
+                trees = TreeRepository(conn)
+                templates = TaskTemplateRepository(conn)
+                tasks_repo = TaskRepository(conn)
+                sources = SourceService(
+                    SourceRepository(conn), trees, get_vector_store(settings), settings
+                )
+                svc = CarePlanService(templates, tasks_repo, trees, sources, settings)
+                tasks_svc = TaskService(tasks_repo, trees, templates)
+                return await body(conn, trees, templates, tasks_repo, svc, tasks_svc)
+        finally:
+            await db.dispose_all()
+
+    return asyncio.run(_wrap())
+
+
+def test_generate_scales_from_height_then_baseline_materialises_tasks():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 4.0}
+        ))["tree_id"]
+
+        with fake_plan_llm():
+            plan = await svc.generate(tid)
+
+        assert len(plan.templates) == 3
+        assert plan.generated and plan.pending_task_count == 0
+        # baseline question only for the fertilize item
+        assert [q.name for q in plan.baseline_questions] == ["Nitrogen feed"]
+        feed = next(t for t in plan.templates if t.name == "Nitrogen feed")
+        assert feed.estimated_minutes > 0
+        assert any("fertilizer" in r.name.lower() for r in feed.resource_plan)
+
+        # a taller tree would have produced bigger numbers
+        small_tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 1.5}
+        ))["tree_id"]
+        with fake_plan_llm():
+            small_plan = await svc.generate(small_tid)
+        small_feed = next(t for t in small_plan.templates if t.name == "Nitrogen feed")
+        assert feed.estimated_minutes >= small_feed.estimated_minutes
+
+        # baseline: last fed 10 days ago -> first task due ~ 80 days out
+        last = date.today() - timedelta(days=10)
+        created = await svc.apply_baseline(
+            tid, [BaselineAnswer(template_id=feed.id, last_done=last)]
+        )
+        assert len(created) == 3
+        feed_task = next(t for t in created if t.template_id == feed.id)
+        assert feed_task.scheduled_date.date() == last + timedelta(days=90)
+        assert feed_task.estimated_minutes == feed.estimated_minutes
+
+        # re-running baseline is idempotent (one open task per template)
+        again = await svc.apply_baseline(tid, [])
+        assert again == []
+
+    _run(body)
+
+
+def test_edit_template_rescales_and_resyncs_open_task():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 3.0}
+        ))["tree_id"]
+        with fake_plan_llm():
+            plan = await svc.generate(tid)
+        feed = next(t for t in plan.templates if t.category == "fertilize")
+        await svc.apply_baseline(tid, [])
+
+        # bump to heavy feeder + change interval
+        updated = await svc.update_template(
+            feed.id, TaskTemplateUpdate(rate_class="heavy", interval_days=60)
+        )
+        assert updated.estimated_minutes >= feed.estimated_minutes
+        heavier = next(r for r in updated.resource_plan if "fertilizer" in r.name.lower())
+        lighter = next(r for r in feed.resource_plan if "fertilizer" in r.name.lower())
+        assert heavier.quantity > lighter.quantity
+
+        open_task = await tasks_repo.open_for_template(feed.id)
+        assert open_task["estimated_minutes"] == updated.estimated_minutes
+        assert open_task["scheduled_date"].date() == date.today() + timedelta(days=60)
+
+    _run(body)
+
+
+def test_complete_respawns_next_from_template():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 2.5}
+        ))["tree_id"]
+        with fake_plan_llm():
+            plan = await svc.generate(tid)
+        scout = next(t for t in plan.templates if t.category == "scout")
+        await svc.apply_baseline(tid, [])
+
+        first = await tasks_repo.open_for_template(scout.id)
+        done = await tasks_svc.mark_complete(first["id"])
+        assert done.status == "completed"
+
+        nxt = await tasks_repo.open_for_template(scout.id)
+        assert nxt is not None and nxt["id"] != first["id"]
+        assert nxt["scheduled_date"].date() == (
+            first["scheduled_date"].date() + timedelta(days=scout.interval_days)
+        )
+
+        # skip advances the recurrence too
+        skipped = await tasks_svc.skip_task(nxt["id"])
+        assert skipped.status == "skipped"
+        assert (await tasks_repo.open_for_template(scout.id))["id"] not in (
+            first["id"], nxt["id"],
+        )
+
+    _run(body)
+
+
+def test_delete_template_removes_its_open_task():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create({"species": "mango", "variety": "Kent"}))["tree_id"]
+        with fake_plan_llm():
+            plan = await svc.generate(tid)
+        await svc.apply_baseline(tid, [])
+        victim = plan.templates[0]
+
+        await svc.delete_template(victim.id)
+        assert await templates.get(victim.id) is None
+        assert await tasks_repo.open_for_template(victim.id) is None
+        remaining = await svc.get_plan(tid)
+        assert len(remaining.templates) == 2
+
+    _run(body)
+
+
+# --------------------------------------------------------------------------
+# 3. HTTP surface
+# --------------------------------------------------------------------------
+
+@pytest.fixture()
+def client(tmp_path: Path):
+    settings = stack_settings(uploads_dir=str(tmp_path))
+    app.dependency_overrides[get_settings_dep] = lambda: settings
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+def test_care_plan_http_roundtrip(client):
+    tree = client.post(
+        "/api/v1/trees",
+        json={"species": "mango", "variety": "Kent", "height_m": 3.5},
+    ).json()
+    tid = tree["tree_id"]
+    assert tree["height_m"] == 3.5
+
+    with fake_plan_llm():
+        plan = client.post(f"/api/v1/trees/{tid}/care-plan/generate").json()
+    assert len(plan["templates"]) == 3
+    assert plan["baseline_questions"][0]["question"] == "When did you last fertilize?"
+
+    tmpl_id = plan["templates"][0]["id"]
+    patched = client.patch(
+        f"/api/v1/care-plan/templates/{tmpl_id}", json={"priority_score": 9.5}
+    )
+    assert patched.status_code == 200 and patched.json()["priority_score"] == 9.5
+
+    made = client.post(f"/api/v1/trees/{tid}/care-plan/baseline", json={"answers": []})
+    assert made.status_code == 200 and len(made.json()) == 3
+
+    inbox = client.get("/api/v1/tasks").json()
+    assert len(inbox) == 3
+    assert {t["template_category"] for t in inbox} == {"fertilize", "prune", "scout"}
+    assert inbox[0]["priority_score"] >= inbox[-1]["priority_score"]
+
+    first = inbox[0]["id"]
+    done = client.post(f"/api/v1/tasks/{first}/complete")
+    assert done.status_code == 200 and done.json()["status"] == "completed"
+    assert len(client.get("/api/v1/tasks").json()) == 3   # respawned
+
+    assert client.delete(f"/api/v1/care-plan/templates/{tmpl_id}").status_code == 204
+    assert len(client.get(f"/api/v1/trees/{tid}/care-plan").json()["templates"]) == 2
+
+
+def test_generate_care_plan_503_when_ollama_down(client):
+    tid = client.post(
+        "/api/v1/trees", json={"species": "mango", "variety": "Kent"}
+    ).json()["tree_id"]
+
+    llm = MagicMock()
+    llm.with_structured_output = MagicMock(return_value=llm)
+    llm.ainvoke = AsyncMock(side_effect=RuntimeError("connection refused"))
+    with patch("app.agent.agronomist.ChatOllama", return_value=llm):
+        r = client.post(f"/api/v1/trees/{tid}/care-plan/generate")
+    assert r.status_code == 503

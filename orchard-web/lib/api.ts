@@ -8,12 +8,16 @@
 import type { Conversation, ConversationDetail } from "./chat/types";
 import type {
   ApiErrorBody,
+  CarePlan,
+  InboxTask,
   RachioDevice,
   ReportResult,
   ScheduleState,
   Source,
   SourceDetail,
   TaskRead,
+  TaskTemplate,
+  TaskTemplatePatch,
   Tree,
   TreeInput,
   TreePatch,
@@ -195,6 +199,39 @@ export const scheduleApi = {
       thread_id: threadId ?? null,
       text,
     }),
+};
+
+/** Per-tree Care Plan: generate (Agronomist), edit templates, run the
+ *  baseline wizard to materialise the first recurring tasks. */
+export const carePlanApi = {
+  get: (treeId: number) =>
+    apiClient.get<CarePlan>(`${API_PREFIX}/trees/${treeId}/care-plan`),
+  generate: (treeId: number) =>
+    apiClient.post<CarePlan>(`${API_PREFIX}/trees/${treeId}/care-plan/generate`),
+  baseline: (
+    treeId: number,
+    answers: { template_id: number; last_done: string | null }[],
+  ) =>
+    apiClient.post<TaskRead[]>(
+      `${API_PREFIX}/trees/${treeId}/care-plan/baseline`,
+      { answers },
+    ),
+  updateTemplate: (templateId: number, patch: TaskTemplatePatch) =>
+    apiClient.patch<TaskTemplate>(
+      `${API_PREFIX}/care-plan/templates/${templateId}`,
+      patch,
+    ),
+  deleteTemplate: (templateId: number) =>
+    apiClient.del(`${API_PREFIX}/care-plan/templates/${templateId}`),
+};
+
+/** The schedule inbox: generated tasks, and closing them out. */
+export const tasksApi = {
+  list: () => apiClient.get<InboxTask[]>(`${API_PREFIX}/tasks`),
+  complete: (id: number) =>
+    apiClient.post<TaskRead>(`${API_PREFIX}/tasks/${id}/complete`),
+  skip: (id: number) => apiClient.post<TaskRead>(`${API_PREFIX}/tasks/${id}/skip`),
+  defer: (id: number) => apiClient.post<TaskRead>(`${API_PREFIX}/tasks/${id}/defer`),
 };
 
 /** Persisted assistant conversations (history sidebar). The turn itself is

@@ -34,6 +34,8 @@ const EMPTY: TreeInput = {
   planted_date: null,
   additional_context: null,
   notes: null,
+  height_m: null,
+  canopy_spread_m: null,
 };
 
 function fromTree(tree: Tree): TreeInput {
@@ -44,6 +46,8 @@ function fromTree(tree: Tree): TreeInput {
     planted_date: tree.planted_date,
     additional_context: tree.additional_context,
     notes: tree.notes,
+    height_m: tree.height_m,
+    canopy_spread_m: tree.canopy_spread_m,
   };
 }
 
@@ -96,6 +100,8 @@ export function TreeEntityForm({
       planted_date: values.planted_date || null,
       additional_context: values.additional_context?.trim() || null,
       notes: values.notes?.trim() || null,
+      height_m: values.height_m ?? null,
+      canopy_spread_m: values.canopy_spread_m ?? null,
     };
 
     setSubmitting(true);
@@ -195,6 +201,46 @@ export function TreeEntityForm({
             type="date"
             value={values.planted_date ?? ""}
             onChange={(e) => set("planted_date", e.target.value || null)}
+          />
+        </Field>
+
+        <Field
+          label="Canopy height (m)"
+          hint="Scales Care Plan fertilizer / compost amounts and task time"
+          error={errors.height_m}
+          htmlFor="tree-height"
+        >
+          <Input
+            id="tree-height"
+            type="number"
+            step="0.1"
+            min="0"
+            value={values.height_m ?? ""}
+            onChange={(e) =>
+              set("height_m", e.target.value ? Number(e.target.value) : null)
+            }
+            placeholder="e.g. 3.5"
+          />
+        </Field>
+
+        <Field
+          label="Canopy spread (m)"
+          hint="Optional — defaults to 0.6 × height"
+          error={errors.canopy_spread_m}
+          htmlFor="tree-spread"
+        >
+          <Input
+            id="tree-spread"
+            type="number"
+            step="0.1"
+            min="0"
+            value={values.canopy_spread_m ?? ""}
+            onChange={(e) =>
+              set(
+                "canopy_spread_m",
+                e.target.value ? Number(e.target.value) : null,
+              )
+            }
           />
         </Field>
       </div>

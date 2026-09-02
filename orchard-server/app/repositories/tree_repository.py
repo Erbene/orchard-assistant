@@ -16,6 +16,8 @@ _COLUMNS = (
     "planted_date",
     "additional_context",
     "notes",
+    "height_m",
+    "canopy_spread_m",
 )
 _MUTABLE = tuple(c for c in _COLUMNS if c != "tree_id")
 

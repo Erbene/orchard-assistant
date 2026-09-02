@@ -51,6 +51,9 @@ export interface Tree {
   planted_date: string | null;
   additional_context: string | null;
   notes: string | null;
+  /** Canopy dimensions (metres) - drive Care Plan resource/time scaling. */
+  height_m: number | null;
+  canopy_spread_m: number | null;
   age_days: number | null;
   age_years: number | null;
 }
@@ -62,6 +65,8 @@ export interface TreeInput {
   planted_date?: string | null;
   additional_context?: string | null;
   notes?: string | null;
+  height_m?: number | null;
+  canopy_spread_m?: number | null;
 }
 
 export type TreePatch = Partial<TreeInput>;
@@ -107,11 +112,14 @@ export interface ReportResult {
   note: string;
 }
 
+export type TaskStatus = "pending" | "completed" | "deferred" | "skipped";
+
 export interface TaskRead {
   id: number;
   tree_id: number;
+  template_id: number | null;
   action_type: string;
-  status: "pending" | "completed" | "deferred";
+  status: TaskStatus;
   priority_score: number;
   scheduled_date: string | null;
   frequency_days: number | null;
@@ -119,6 +127,69 @@ export interface TaskRead {
   required_resources: string[];
   created_at: string;
   completed_at: string | null;
+}
+
+// -- Care Plan engine ---------------------------------------------------
+
+export type CareCategory =
+  | "fertilize" | "mulch" | "prune" | "scout" | "spray"
+  | "irrigation" | "weed" | "stake" | "soil_test" | "other";
+export type RateClass = "light" | "standard" | "heavy";
+
+export interface ResourceLine {
+  name: string;
+  quantity: number;
+  unit: string;
+}
+
+export interface TaskTemplate {
+  id: number;
+  tree_id: number;
+  name: string;
+  category: CareCategory;
+  rate_class: RateClass;
+  interval_days: number;
+  estimated_minutes: number;
+  priority_score: number;
+  required_resources: string[];
+  resource_plan: ResourceLine[];
+  baseline_question: string | null;
+  anchor_date: string | null;
+  source_ids: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BaselineQuestion {
+  template_id: number;
+  name: string;
+  question: string;
+}
+
+export interface CarePlan {
+  tree_id: number;
+  templates: TaskTemplate[];
+  baseline_questions: BaselineQuestion[];
+  pending_task_count: number;
+  generated: boolean;
+}
+
+export type TaskTemplatePatch = Partial<{
+  name: string;
+  category: CareCategory;
+  rate_class: RateClass;
+  interval_days: number;
+  estimated_minutes: number;
+  priority_score: number;
+  required_resources: string[];
+}>;
+
+export interface InboxTask extends TaskRead {
+  template_name: string | null;
+  template_category: CareCategory | null;
+  template_resource_plan: ResourceLine[];
+  tree_species: string;
+  tree_variety: string;
 }
 
 export type SourceType = "file" | "text";
