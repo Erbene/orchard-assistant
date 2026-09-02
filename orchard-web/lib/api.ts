@@ -8,8 +8,11 @@
 import type {
   ApiErrorBody,
   RachioDevice,
+  ReportResult,
+  ScheduleState,
   Source,
   SourceDetail,
+  TaskRead,
   Tree,
   TreeInput,
   TreePatch,
@@ -163,6 +166,33 @@ export const treesApi = {
   setLinkedSources: (id: number, sourceIds: number[]) =>
     apiClient.put<Source[]>(`${API_PREFIX}/trees/${id}/sources`, {
       source_ids: sourceIds,
+    }),
+};
+
+/** Phase 4 - the Foreman's interactive JIT scheduling loop. */
+export const scheduleApi = {
+  plan: (availableMinutes?: number) =>
+    apiClient.post<ScheduleState>(`${API_PREFIX}/schedule/plan`, {
+      available_minutes: availableMinutes ?? null,
+    }),
+  resumeTime: (threadId: string, availableMinutes: number) =>
+    apiClient.post<ScheduleState>(`${API_PREFIX}/schedule/resume`, {
+      thread_id: threadId,
+      available_minutes: availableMinutes,
+    }),
+  resumeResources: (threadId: string, haveResources: string[]) =>
+    apiClient.post<ScheduleState>(`${API_PREFIX}/schedule/resume`, {
+      thread_id: threadId,
+      have_resources: haveResources,
+    }),
+  complete: (taskIds: number[]) =>
+    apiClient.post<TaskRead[]>(`${API_PREFIX}/schedule/complete`, {
+      task_ids: taskIds,
+    }),
+  report: (text: string, threadId?: string) =>
+    apiClient.post<ReportResult>(`${API_PREFIX}/schedule/report`, {
+      thread_id: threadId ?? null,
+      text,
     }),
 };
 

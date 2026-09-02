@@ -24,7 +24,9 @@ from .rag.vector_store import OrchardVectorStore, get_vector_store
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.tree_repository import TreeRepository
+from .agent.checkpointer import ensure_foreman_graph
 from .services.chat_service import ChatService
+from .services.foreman_service import ForemanService
 from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.task_service import TaskService
@@ -93,6 +95,14 @@ def get_task_service(
     trees: TreeRepository = Depends(get_tree_repository),
 ) -> TaskService:
     return TaskService(tasks, trees)
+
+
+async def get_foreman_service(
+    tasks: TaskService = Depends(get_task_service),
+    settings: Settings = Depends(get_settings_dep),
+) -> ForemanService:
+    graph = await ensure_foreman_graph(settings)
+    return ForemanService(tasks, graph)
 
 
 def get_source_service(

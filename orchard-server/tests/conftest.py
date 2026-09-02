@@ -23,6 +23,8 @@ from pathlib import Path
 # always mocked / never really configured. Set BEFORE app.config imports.
 os.environ["ORCHARD_SKIP_DOTENV"] = "1"
 os.environ["RACHIO_API_KEY"] = ""
+os.environ["LANGCHAIN_TRACING_V2"] = "false"   # no LangSmith calls in CI
+os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:1"  # unreachable -> template fallback
 
 import asyncpg
 import pytest
@@ -35,7 +37,10 @@ TEST_DB = "orchard_test"
 TEST_COLLECTION = "orchard_knowledge_test"
 
 _INIT_SQL = Path(__file__).resolve().parent.parent / "docker" / "postgres" / "init.sql"
-_TABLES = ("source_chunks", "tree_sources", "task", "sources", "tree")
+_TABLES = (
+    "source_chunks", "tree_sources", "task", "sources", "tree",
+    "checkpoint_writes", "checkpoint_blobs", "checkpoints",  # langgraph, when present
+)
 
 
 def stack_settings(**overrides) -> Settings:

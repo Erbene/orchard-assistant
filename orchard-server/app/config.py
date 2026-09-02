@@ -120,6 +120,15 @@ class Settings:
     )
     db_echo: bool = field(default_factory=lambda: _bool("DB_ECHO", default=False))
 
+    # Local LLM for the Foreman agent (app/agent/foreman.py) - optional at
+    # runtime; narration falls back to a template when Ollama is unreachable.
+    ollama_base_url: str = field(
+        default_factory=lambda: os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    )
+    foreman_model: str = field(
+        default_factory=lambda: os.environ.get("FOREMAN_MODEL", "qwen2.5:14b")
+    )
+
     # Rachio Smart Irrigation API (app/services/rachio.py) - optional; zone
     # endpoints/tools return 503 when the key is unset.
     rachio_api_key: str = field(
@@ -156,6 +165,17 @@ class Settings:
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    def psycopg_dsn(self) -> str:
+        """psycopg3 DSN (no ``+asyncpg``) for the LangGraph Postgres checkpointer.
+
+        ``localhost`` is normalized to ``127.0.0.1``: psycopg_pool's background
+        connect worker can stall resolving ``localhost`` to IPv6 first on
+        Windows, and the compose ports are IPv4-bound anyway.
+        """
+        dsn = self.database_url or self.sqlalchemy_dsn()
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+        return dsn.replace("@localhost:", "@127.0.0.1:", 1)
 
 
 @lru_cache

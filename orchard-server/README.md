@@ -103,12 +103,12 @@ All API routes are mounted under **`/api/v1`** (`GET /health` is not). The
 
 Tree `age_days` / `age_years` are derived from `planted_date` on read, never stored.
 
-### Tasks (JIT scheduling model — service + MCP only)
+### Tasks (JIT scheduling model)
 
-`task` (FK → `tree`, `ON DELETE CASCADE`), reached through the MCP tools below.
-**No REST routers yet.** `user_context` was **dropped** — scheduling
-constraints (available minutes, resources) are now gathered *just in time* in
-conversation by the agent, not stored.
+`task` (FK → `tree`, `ON DELETE CASCADE`), reached through the MCP tools and
+the Foreman's `/api/v1/schedule/*` routes. `user_context` was **dropped** —
+scheduling constraints (available minutes, resources) are gathered *just in
+time* by the Foreman, not stored.
 
 - `task`: `id`, `tree_id`, `action_type` (free text), `status`
   (`pending`/`completed`/`deferred` — a real state field, so it *is*
@@ -148,13 +148,44 @@ MiniLM embedding model (~80 MB).
 
 ### Agent skeleton (`app/agent/`)
 
-LangGraph `StateGraph(AgentState)` — `AgentState = {messages, active_tree_id,
-available_minutes, confirmed_resources}`. Nodes `orchestrator` → `{agronomist,
-foreman}`; the **Foreman** node does the JIT multi-turn check (returns a
-question and ends the turn when `available_minutes` is `None`). Nodes are stubs
-(no LLM); `app/agent/client.py` binds the MCP tools via
-`langchain-mcp-adapters`. LangSmith tracing via `LANGCHAIN_*` env vars — see
-`.env.example`.
+`graph.py` — the orchestrator skeleton (routes agronomy vs. scheduling
+questions); still stubs. `agronomist.py` — the Consensus-Fusion prompt +
+`format_priority_context`. The real interactive scheduler is the Foreman ↓.
+
+### Foreman — interactive JIT scheduling (Phase 4)
+
+[app/agent/foreman.py](app/agent/foreman.py) is a **checkpointed two-interrupt
+LangGraph negotiation** driven over REST:
+
+```
+time_check --(interrupt: available_minutes)--> propose --> resource_check
+  --(interrupt: have_resources)--> finalize --> narrate --> END
+```
+
+- **Deterministic engine** (`escalate` / `pack` / `resources_for` / `refit`):
+  [app/agent/escalation.py](app/agent/escalation.py) inflates the
+  `priority_score` of dangerously-overdue tasks (keyword rules table +
+  generic >14-day fallback), then a greedy knapsack packs the budget, the
+  union of `required_resources` is asked about, and tasks needing a missing
+  tool are dropped + the freed time backfilled. **No node writes the DB.**
+- **Narration**: a local **Ollama** model (`FOREMAN_MODEL`, default
+  `qwen2.5:14b`) writes the session summary. Optional — falls back to a
+  template when Ollama is unreachable (`ollama serve && ollama pull qwen2.5:14b`).
+- **Sessions** persist to Postgres (`langgraph-checkpoint-postgres`,
+  `checkpoints*` tables) keyed by `thread_id`, resumable after a restart. The
+  graph is *synchronous* (async psycopg can't run on Windows' Proactor loop)
+  and `ForemanService` runs it via `asyncio.to_thread`.
+
+| Method | Path | Notes |
+| ------ | ---- | ----- |
+| `POST` | `/api/v1/schedule/plan` | `{available_minutes?}` → `ScheduleState` (`step: need_time \| need_resources \| done`) + a `thread_id` |
+| `POST` | `/api/v1/schedule/resume` | `{thread_id, available_minutes? \| have_resources?}` → next `ScheduleState` |
+| `POST` | `/api/v1/schedule/complete` | `{task_ids}` → mark done (the UI button) |
+| `POST` | `/api/v1/schedule/report` | `{text}` — "finished task 2 and 3" → marks them (regex extraction) |
+
+DB writes happen **only** on `/complete`, `/report`, or the MCP tool
+`mark_tasks_complete(task_ids)` — the schedule itself is a proposal.
+`orchard-web` `/schedule` is the 3-step wizard for this flow.
 
 ### Chat (SSE)
 
@@ -187,7 +218,8 @@ engine the HTTP API uses, wrapped in a transaction) — no HTTP calls to self.
   irrigation action; the only Rachio write). No create/update/delete.
 - trees — `list_trees`, `get_tree_details`, `create_tree`, `update_tree`, `delete_tree`
 - tasks (Foreman) — `get_pending_tasks`, `get_task_details`, `create_task`,
-  `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`, `defer_task`
+  `create_baseline_tasks`, `batch_update_task_priorities`, `mark_task_complete`,
+  **`mark_tasks_complete(task_ids)`** (bulk - for "done with 3 and 5"), `defer_task`
   (`create_task` / `create_baseline_tasks` require the LLM to supply
   `estimated_minutes` + `required_resources`)
 - knowledge base — `list_sources`, `add_text_source(name, text)`,

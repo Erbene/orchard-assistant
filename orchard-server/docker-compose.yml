@@ -152,6 +152,10 @@ services:
       # Optional - empty => the /zones endpoints + tools return 503.
       RACHIO_API_KEY: ${RACHIO_API_KEY:-}
       RACHIO_BASE_URL: ${RACHIO_BASE_URL:-https://api.rach.io/1/public}
+      # Foreman LLM - Ollama on the host (Docker Desktop resolves this name).
+      # Optional: unreachable => the Foreman returns a templated summary.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      FOREMAN_MODEL: ${FOREMAN_MODEL:-qwen2.5:14b}
       LOG_FORMAT: json
     volumes:
       - uploads_data:/app/uploads

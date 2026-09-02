@@ -127,6 +127,17 @@ class TaskService:
             )
         return completed
 
+    async def mark_many_complete(self, task_ids: Sequence[int]) -> list[TaskRead]:
+        """Complete several tasks at once (the Foreman's write path). Unknown or
+        already-completed ids are skipped; returns the tasks actually touched."""
+        done: list[TaskRead] = []
+        for task_id in dict.fromkeys(task_ids):  # de-dupe, keep order
+            try:
+                done.append(await self.mark_complete(int(task_id)))
+            except NotFoundError:
+                continue
+        return done
+
     async def defer_task(
         self, task_id: int, *, until: datetime | None = None
     ) -> TaskRead:

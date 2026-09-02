@@ -66,6 +66,61 @@ export interface TreeInput {
 
 export type TreePatch = Partial<TreeInput>;
 
+// -- Phase 4: Foreman JIT scheduling --------------------------------------
+
+export type ScheduleStep = "need_time" | "need_resources" | "done";
+
+export interface ScheduleTask {
+  id: number;
+  tree_id: number;
+  action_type: string;
+  estimated_minutes: number | null;
+  priority_score: number;
+  effective_score: number | null;
+  required_resources: string[];
+  escalated: boolean;
+  drop_reason: string | null;
+}
+
+export interface ScheduleEscalation {
+  task_id: number;
+  action_type: string;
+  days_late: number;
+  multiplier: number;
+  reason: string;
+}
+
+export interface ScheduleState {
+  thread_id: string;
+  step: ScheduleStep;
+  available_minutes: number | null;
+  required_resources: string[];
+  proposed_tasks: ScheduleTask[];
+  dropped_tasks: ScheduleTask[];
+  escalations: ScheduleEscalation[];
+  summary: string | null;
+  warnings: string[];
+}
+
+export interface ReportResult {
+  marked: number[];
+  note: string;
+}
+
+export interface TaskRead {
+  id: number;
+  tree_id: number;
+  action_type: string;
+  status: "pending" | "completed" | "deferred";
+  priority_score: number;
+  scheduled_date: string | null;
+  frequency_days: number | null;
+  estimated_minutes: number | null;
+  required_resources: string[];
+  created_at: string;
+  completed_at: string | null;
+}
+
 export type SourceType = "file" | "text";
 
 export interface Source {

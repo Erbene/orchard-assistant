@@ -459,6 +459,25 @@ async def mark_task_complete(task_id: int) -> dict:
 
 
 @mcp.tool()
+async def mark_tasks_complete(task_ids: list[int]) -> list[dict]:
+    """Mark several tasks ``completed`` in one call - the Foreman's write path.
+
+    Call this whenever the user says they finished work during a scheduling
+    session, e.g. "done with task 3 and 5" or "completed the pruning (task 12)".
+    Recurring tasks spawn their next occurrence. Unknown / already-completed
+    ids are skipped.
+
+    Args:
+        task_ids: The task ids the user reported finishing.
+
+    Returns the list of task objects that were actually completed.
+    """
+    async with _session() as svc:
+        done = await svc.tasks.mark_many_complete(task_ids)
+    return [t.model_dump(mode="json") for t in done]
+
+
+@mcp.tool()
 async def defer_task(task_id: int, until: str | None = None) -> dict:
     """Move a task to ``deferred`` status, optionally rescheduling it.
 

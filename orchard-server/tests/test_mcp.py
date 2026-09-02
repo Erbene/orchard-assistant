@@ -30,6 +30,7 @@ EXPECTED_TOOLS = {
     "create_baseline_tasks",
     "batch_update_task_priorities",
     "mark_task_complete",
+    "mark_tasks_complete",
     "list_sources",
     "add_text_source",
     "link_tree_sources",
@@ -120,6 +121,13 @@ async def _exercise() -> None:
 
             done = await session.call_tool("mark_task_complete", {"task_id": t1["id"]})
             assert _payload(done)["status"] == "completed"
+
+            # bulk completion (Foreman's write path) - t2 + an unknown id
+            bulk = _payload(await session.call_tool(
+                "mark_tasks_complete", {"task_ids": [t2["id"], 999999]}
+            ))
+            assert [t["id"] for t in bulk] == [t2["id"]]
+            assert bulk[0]["status"] == "completed"
 
             # --- knowledge base: empty, then whole-KB search, then scoped ---
             assert "no linked knowledge sources" in _payload(await session.call_tool(

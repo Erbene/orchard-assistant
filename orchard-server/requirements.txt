@@ -14,10 +14,13 @@ asyncpg>=0.30
 chromadb>=1.5,<2
 pypdf>=5
 
-# Agent orchestration skeleton (app/agent)
+# Agent orchestration (app/agent) + Phase 4 Foreman
 langgraph>=1.2,<2
 langchain-core>=1.0,<2
 langchain-mcp-adapters>=0.3,<1
+langchain-ollama>=1.0,<2          # local LLM (Foreman narration) - optional at runtime
+langgraph-checkpoint-postgres>=3,<4
+psycopg[binary,pool]>=3.2
 
 pytest==8.3.4
 respx>=0.21,<0.23        # httpx-native mocking for the Rachio service tests

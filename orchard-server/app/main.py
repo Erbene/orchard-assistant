@@ -17,6 +17,7 @@ from .api.errors import register_exception_handlers
 from .config import get_settings
 from .core import db
 from .core.logging import configure_logging, get_logger
+from .agent.checkpointer import close_checkpointers
 from .core.middleware import RequestContextMiddleware
 from .mcp_server import mcp
 from .services.rachio import get_rachio_service
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
         log.warning("app.startup_ddl.failed", exc_info=True)
     yield
     await db.dispose_all()
+    await close_checkpointers()
     try:
         await get_rachio_service(get_settings()).aclose()
     except Exception:  # noqa: BLE001

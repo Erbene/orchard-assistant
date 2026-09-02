@@ -4,6 +4,8 @@ repository against the disposable ``orchard_test`` Postgres database
 the autouse fixture in conftest.py). Rachio is always mocked with respx."""
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -11,8 +13,11 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+from app.core import db
 from app.dependencies import get_settings_dep
 from app.main import app
+from app.repositories.task_repository import TaskRepository
+from app.repositories.tree_repository import TreeRepository
 from app.services.rachio import get_rachio_service
 
 from conftest import stack_settings
@@ -137,3 +142,78 @@ def test_tree_crud_age_and_freetext_zone(client):
 
     assert client.delete(f"{API}/trees/{tid}").status_code == 204
     assert client.get(f"{API}/trees/{tid}").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Phase 4 - Foreman JIT scheduling loop
+# --------------------------------------------------------------------------
+
+async def _seed_schedule_tasks(settings) -> None:
+    """One tree + a backlog with an overdue fungicide task and tool-free work."""
+    late = datetime.now(timezone.utc) - timedelta(days=12)
+    async with db.connection(settings) as conn:
+        tree_id = (await TreeRepository(conn).create(
+            {"species": "mango", "variety": "Kent"}
+        ))["tree_id"]
+        repo = TaskRepository(conn)
+        await repo.create({
+            "tree_id": tree_id, "action_type": "copper fungicide spray", "status": "pending",
+            "priority_score": 4.0, "scheduled_date": late, "estimated_minutes": 30,
+            "required_resources": ["Copper Fungicide", "Sprayer"],
+        })
+        await repo.create({
+            "tree_id": tree_id, "action_type": "prune sprouts", "status": "pending",
+            "priority_score": 8.0, "estimated_minutes": 45, "required_resources": ["Pruning Shears"],
+        })
+        for name, score, mins in [("mulch ring", 3.0, 20), ("inspect for pests", 2.0, 15)]:
+            await repo.create({
+                "tree_id": tree_id, "action_type": name, "status": "pending",
+                "priority_score": score, "estimated_minutes": mins, "required_resources": [],
+            })
+    # this ran in its own asyncio.run loop; drop the engine so TestClient rebuilds
+    await db.dispose_all()
+
+
+def test_schedule_jit_negotiation_and_completion(client):
+    settings = stack_settings()
+    asyncio.run(_seed_schedule_tasks(settings))
+
+    # step 1: no time budget -> interrupt asks for it
+    s = client.post(f"{API}/schedule/plan", json={}).json()
+    assert s["step"] == "need_time"
+    thread = s["thread_id"]
+
+    # step 2: resume with minutes -> interrupt asks which tools you have
+    s = client.post(f"{API}/schedule/resume",
+                    json={"thread_id": thread, "available_minutes": 90}).json()
+    assert s["step"] == "need_resources"
+    assert "Copper Fungicide" in s["required_resources"]
+
+    # step 3: you have shears but not the fungicide -> that task drops, backfill
+    s = client.post(f"{API}/schedule/resume",
+                    json={"thread_id": thread, "have_resources": ["Pruning Shears"]}).json()
+    assert s["step"] == "done"
+    dropped = {t["id"]: t for t in s["dropped_tasks"]}
+    assert dropped and all(t["drop_reason"] for t in dropped.values())
+    assert any(t["escalated"] for t in dropped.values())          # the overdue fungicide
+    assert any("overdue" in w for w in s["warnings"])
+    assert s["summary"]
+    picked = [t["id"] for t in s["proposed_tasks"]]
+    assert picked and not (set(picked) & set(dropped))
+
+    # UI "Mark Complete"
+    first = picked[0]
+    done = client.post(f"{API}/schedule/complete", json={"task_ids": [first]}).json()
+    assert done[0]["id"] == first and done[0]["status"] == "completed"
+
+    # natural-language completion ("finished task N")
+    second = picked[1]
+    r = client.post(f"{API}/schedule/report",
+                    json={"thread_id": thread, "text": f"also finished task {second}"}).json()
+    assert second in r["marked"]
+
+
+def test_schedule_resume_needs_a_value(client):
+    s = client.post(f"{API}/schedule/plan", json={}).json()
+    r = client.post(f"{API}/schedule/resume", json={"thread_id": s["thread_id"]})
+    assert r.status_code == 422

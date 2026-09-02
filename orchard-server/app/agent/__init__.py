@@ -1,7 +1,10 @@
-"""LangGraph orchestration skeleton for the JIT conversational scheduler.
+"""Agent graphs for the orchard.
 
-Not wired to a real LLM yet - the nodes are stubs that demonstrate control
-flow, the JIT multi-turn check, and MCP tool binding.
+* ``graph.py`` - the orchestrator skeleton (routes agronomy vs. scheduling
+  questions); nodes are still stubs.
+* ``foreman.py`` + ``escalation.py`` - **Phase 4**, the real interactive JIT
+  scheduler: a checkpointed two-interrupt LangGraph negotiation driven over
+  REST at ``/api/v1/schedule/*`` (see ``app/services/foreman_service.py``).
 """
 from .graph import build_graph
 from .state import AgentState
