@@ -49,18 +49,26 @@ def build_graph(
     async def _complete(state: OrchestratorState) -> dict:
         ids = state.get("task_ids") or []
         if not ids:
+            # No number given - always ask, regardless of what the router put
+            # in `reply` (it sometimes just acknowledges).
             return {
-                "answer": state.get("reply")
-                or "Which tasks did you finish? Tell me the task numbers.",
+                "answer": "Which task number did you finish? Tell me the number "
+                "and I'll mark it done.",
                 "tool_calls": [],
             }
         done = await tasks.mark_many_complete(ids)
         done_ids = [t.id for t in done]
         missed = sorted(set(ids) - set(done_ids))
-        answer = state.get("reply") or ""
-        answer = f"{answer} Marked {done_ids} complete.".strip()
-        if missed:
-            answer += f" Couldn't find task(s) {missed}."
+        ack = state.get("reply") or "Done."
+        if done_ids and missed:
+            answer = (
+                f"{ack} Marked task(s) {done_ids} complete. "
+                f"Couldn't find task(s) {missed} - double-check the number(s)?"
+            )
+        elif done_ids:
+            answer = f"{ack} Marked task(s) {done_ids} complete."
+        else:
+            answer = f"Couldn't find task(s) {missed} - double-check the number(s)?"
         return {
             "answer": answer,
             "tool_calls": [

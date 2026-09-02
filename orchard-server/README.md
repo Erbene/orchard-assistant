@@ -346,3 +346,24 @@ runs `docker compose up -d --wait postgres chromadb`, then works against a
 `orchard_test` and Chroma collection `orchard_knowledge_test`, both reset
 between tests. Your real `orchard` data is never touched. Containers are left
 running afterward.
+
+## Offline evaluation ([eval/](eval/))
+
+A scored, repeatable check of assistant behaviour — separate from `pytest`
+because it needs a reachable Ollama and runs for minutes. Use it to compare
+before/after a model swap or a prompt change.
+
+```sh
+cd orchard-server
+./.venv/Scripts/python -m eval                 # whole dataset -> scorecard
+./.venv/Scripts/python -m eval --only chat
+./.venv/Scripts/python -m eval --id chat-refuse-01-toxic-mix
+```
+
+`eval/dataset.jsonl` (~36 scenarios) drives the real Orchestrator graph
+(routing / retrieval / Agronomist) and the real Foreman negotiation against a
+disposable `orchard_eval` DB. Grading = deterministic checks (route, tool +
+args, interrupt `step` sequence, escalation, "no DB write until an explicit
+completion") plus a `qwen2.5:7b` **AI judge** for free-text answer quality.
+Results land in `eval/results/` (git-ignored). Non-zero exit below the bar.
+See [eval/README.md](eval/README.md).

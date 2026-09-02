@@ -7,3 +7,4 @@ orchard.db
 .env
 chroma/
 uploads/
+eval/results/
