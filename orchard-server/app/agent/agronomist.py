@@ -112,10 +112,10 @@ async def run_agronomist(
         )
 
     llm = ChatOllama(
-        model=settings.agent_model,
+        model=settings.agronomist_model,
         base_url=settings.ollama_base_url,
         temperature=0.2,
-        client_kwargs={"timeout": 60.0},
+        client_kwargs={"timeout": 90.0},  # a 14B model on CPU is slow
     )
     try:
         msg = await llm.ainvoke(

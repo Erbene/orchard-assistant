@@ -18,6 +18,7 @@ from .config import get_settings
 from .core import db
 from .core.logging import configure_logging, get_logger
 from .agent.checkpointer import close_checkpointers
+from .agent.ollama import report_model_availability
 from .core.middleware import RequestContextMiddleware
 from .mcp_server import mcp
 from .services.rachio import get_rachio_service
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
         await db.apply_startup_ddl(get_settings())   # additive, idempotent
     except Exception:  # noqa: BLE001 - don't crash the app if the DB is down
         log.warning("app.startup_ddl.failed", exc_info=True)
+    await report_model_availability(get_settings())   # log missing Ollama models
     yield
     await db.dispose_all()
     await close_checkpointers()

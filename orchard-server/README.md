@@ -295,18 +295,26 @@ tools return `503` / a tool error and everything else works normally.
 -m app.mcp_server`, `dev.ps1`); `docker compose` reads the same file for
 `${RACHIO_API_KEY}`. Real env vars always win over `.env`.
 
-**Local LLM (Ollama).** The Orchestrator/Agronomist need `AGENT_MODEL`
-(default `qwen2.5:7b-instruct`) — `/api/v1/chat` is **503** without a reachable
-Ollama. The Foreman's narration uses `FOREMAN_MODEL` (default `qwen2.5:14b`)
-and is *optional* (templated fallback). `OLLAMA_BASE_URL` defaults to
-`http://localhost:11434` (bare-metal) / `http://host.docker.internal:11434`
-(compose).
+**Local LLM (Ollama).** `/api/v1/chat` is **503** without a reachable Ollama.
+
+| env | role | default | required? |
+| --- | --- | --- | --- |
+| `AGENT_MODEL` | router / classifier (short structured output) | `qwen2.5:7b-instruct` | **yes** |
+| `AGRONOMIST_MODEL` | grounded Q&A over retrieved notes | *falls back to `AGENT_MODEL`* | no |
+| `FOREMAN_MODEL` | JIT session summary | `qwen2.5:14b` | no — templated fallback |
+
+`OLLAMA_BASE_URL` defaults to `http://localhost:11434` (bare-metal) /
+`http://host.docker.internal:11434` (compose). Boot logs `ollama.models.missing`
+if a configured model isn't pulled.
 
 ```sh
 ollama serve
 ollama pull qwen2.5:7b-instruct     # required for chat
-ollama pull qwen2.5:14b             # optional, Foreman narration
+ollama pull qwen2.5:14b             # optional: Foreman narration, or a stronger AGRONOMIST_MODEL
 ```
+
+Why each model was chosen — with the eval numbers behind it, and when to
+revisit — is logged under **[Model & prompt decisions](#model--prompt-decisions--eval-findings)** below.
 
 **Full stack in Docker** — Postgres, Chroma, backend, frontend:
 
@@ -367,3 +375,45 @@ args, interrupt `step` sequence, escalation, "no DB write until an explicit
 completion") plus a `qwen2.5:7b` **AI judge** for free-text answer quality.
 Results land in `eval/results/` (git-ignored). Non-zero exit below the bar.
 See [eval/README.md](eval/README.md).
+
+### Model & prompt decisions — eval findings
+
+A **living log** of why each agent uses the model / prompt it does, with the
+numbers behind each call. The dataset is small (~36 rows) and CPU-only on one
+dev machine, so these are decisions *for the current scope*, not permanent.
+**Revisit any row when a revisit trigger below fires** — re-run `python -m eval`
+and compare. Named snapshots referenced here are kept in
+[eval/baselines/](eval/baselines/) (tracked); ad-hoc runs go to
+`eval/results/` (git-ignored).
+
+| Component | Choice | Evidence (date) | Revisit when |
+| --- | --- | --- | --- |
+| Orchestrator **router** (`AGENT_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-02: 9/9 live golden routes; **36/36** eval exact after prompt fixes; `.with_structured_output` reliable; ~1–2 s/call | routes added/changed; sustained misroutes on new dataset rows; a smaller model tests equal |
+| **Agronomist** (`AGRONOMIST_MODEL`) | `qwen2.5:7b-instruct` (= router; knob exists to override) | 2026-09-02: 7B vs `qwen2.5:14b` = **5/5 vs 5/5** exact+judge, no quality gain, **~45 s vs ~2 s** per answer on CPU, +9 GB resident | dataset gains harder agronomy rows (multi-source conflicts, dosing math, diagnosis chains); a GPU is available; judge scores on agronomy rows drop |
+| **Foreman narration** (`FOREMAN_MODEL`) | `qwen2.5:14b`, optional | engine is deterministic Python; narration is prose-only and templated when the model is absent | narration quality becomes user-visible priority; GPU available |
+| **AI judge** (eval only) | `qwen2.5:7b-instruct` | 2026-09-02: produced ≥1 clearly-wrong verdict at baseline → **advisory only**, exact checks are the gate | judge noise blocks reading real regressions; a bigger judge tests meaningfully steadier |
+
+**Log:**
+
+- **2026-09-02 — router prompt hardening.** First baseline was 32/36 exact. It
+  surfaced four router misses, all fixed in `ORCHESTRATOR_SYSTEM_PROMPT` (+ the
+  `graph._complete` node), taking it to 36/36:
+  1. *"book the farm truck in for an oil change"* → `schedule` (should `refuse`).
+     Fix: `schedule` is orchard field-work only; appointments / services /
+     deliveries / vehicle servicing are out-of-scope `refuse`.
+  2. *"drop the fungicide from every future plan so it stops nagging me"* →
+     `agronomy` (should `refuse`). Fix: UNSAFE list now names hiding / dropping
+     / deleting a safety-critical overdue task.
+  3. *"I wrapped up the mulching this morning"* → invented task id `12`. Fix:
+     `complete` extracts **only** numbers the user typed; no number → empty
+     `task_ids` and the node (not the model) asks which.
+  4. *"Add a new Kent mango in zone rz-3"* → `agronomy` + growing advice. Fix:
+     tree / source CRUD is `refuse` + a pointer to the Trees / Sources pages
+     (chat's tool surface is deliberately router + `mark_tasks_complete` only).
+- **2026-09-02 — Agronomist model experiment.** Reading the 7B vs 14B answers
+  side by side: 14B was marginally tidier and more conservative (declined to
+  give an avocado N-dose from general knowledge where 7B gave a number); 7B was
+  sometimes more practical. Neither is clearly better on this dataset, and 14B
+  costs ~20× latency. Kept 7B; `AGRONOMIST_MODEL` retained as a documented knob.
+  Snapshots: `eval/baselines/2026-09-02-full-7b.json` (full 36-row 7B run),
+  `eval/baselines/2026-09-02-agronomy-14b.json` (5 agronomy rows on 14B).

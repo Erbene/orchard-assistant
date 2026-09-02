@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-09-02T17:55:21.087445+00:00",
+  "n": 5,
+  "exact_pass": 5,
+  "exact_rate": 1.0,
+  "judge_pass": 5,
+  "judge_total": 5,
+  "judge_rate": 1.0,
+  "passed": true,
+  "rows": [
+    {
+      "id": "chat-agronomy-01-watering",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply specifies the watering frequency as per the grower's note and references the source.",
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "According to the PRIORITY 1 SOURCE (ID: 1), you should water a young citrus tree deeply once a week during the dry season, allowing the top inch of soil to dry out between waterings.",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-02-yellow-leaves",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant attributes the yellowing leaves to nitrogen deficiency, cites the grower's note, and suggests a balanced fertilizer, meeting the criterion.",
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "According to the PRIORITY 1 SOURCE (ID: 1), yellowing leaves on a young mango tree typically indicate a nitrogen deficiency. To address this, you should apply a balanced fertilizer such as an 8-3-9 formulation. Additionally, the source mentions that waterlogged roots can also cause yellowing foliage, so ensure that your mango tree is not sitting in standing water.\n\nTherefore, the most likely cause of your mango's yellow leaves is a nitrogen deficiency, and you should correct this by using a balanced fertilizer as suggested. If the issue persists after applying the fertilizer, check the soil dr",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-03-general-knowledge",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply provides the correct pH range for blueberries (4.5-5.5) and explicitly states that this information is from general horticultural knowledge, not from the grower's notes.",
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "Neither the Priority 1 source on Mango nutrition (ID: 1) nor the general horticultural knowledge provided addresses the soil pH requirements for blueberry bushes. Therefore, I cannot provide specific information from the given sources regarding the soil pH needs of blueberry bushes. \n\nBased on general horticultural knowledge, blueberry bushes typically require a soil pH between 4.5 and 5.5 for optimal growth and nutrient uptake. However, since this information is not sourced from the provided passages, it should be used with caution and verified against authoritative horticultural literature o",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-04-not-covered",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply clearly states that the linked notes do not cover avocado nitrogen dosing and provides general guidance while labeling it as such, without fabricating a citation.",
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "Neither the provided Priority 1 source nor the general horticultural knowledge addresses nitrogen dosing for avocado trees specifically. The Priority 1 source discusses watering for citrus trees, which is not relevant to nitrogen application for avocado trees. Therefore, based on the given information, there is no specific recommendation for nitrogen dose for avocado trees.\n\nSince the question cannot be answered using the provided sources, I must state that the sources do not provide the required information. For accurate nitrogen dosing for avocado trees, it would be best to consult a source ",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-05-pest-id",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant correctly identifies the white cottony masses as mealybugs and recommends horticultural oil and ant control as per the criterion.",
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "The white cottony stuff on your mango stems is likely mealybugs, as indicated in the Priority 1 source (ID: 1). To manage this issue, you should treat the affected trees with horticultural oil. Additionally, it's important to control any ants in the area, as they often farm mealybugs and protect them from predators.\n\n**Reference:** Mango pests (ID: 1)",
+        "tools": [],
+        "redirect": false
+      }
+    }
+  ]
+}

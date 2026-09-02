@@ -45,6 +45,10 @@ Written to `eval/results/<timestamp>.json` (git-ignored) plus `latest.json`.
 Each row records what was observed (`route`, `answer`, `steps`, …) so a
 regression is diffable without re-running.
 
+`eval/baselines/` (tracked) holds named snapshots that the main README's
+**Model & prompt decisions** log points at — copy a `results/` run there when
+it's the evidence behind a decision.
+
 ## The dataset (`dataset.jsonl`)
 
 One JSON object per line; `//` lines are comments. It encodes **intended**

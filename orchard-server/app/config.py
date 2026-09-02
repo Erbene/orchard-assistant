@@ -128,8 +128,16 @@ class Settings:
     foreman_model: str = field(
         default_factory=lambda: os.environ.get("FOREMAN_MODEL", "qwen2.5:14b")
     )
+    # Router / classifier (short structured output) - keep this small & fast.
     agent_model: str = field(
         default_factory=lambda: os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
+    )
+    # Agronomist (synthesis + citing sources over retrieved context). Defaults
+    # to `agent_model`; set AGRONOMIST_MODEL to try a stronger model here
+    # without slowing the router.
+    agronomist_model: str = field(
+        default_factory=lambda: os.environ.get("AGRONOMIST_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
     )
 
     # Rachio Smart Irrigation API (app/services/rachio.py) - optional; zone
