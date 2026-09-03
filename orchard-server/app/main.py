@@ -21,20 +21,24 @@ from .agent.checkpointer import close_checkpointers
 from .agent.ollama import report_model_availability
 from .core.middleware import RequestContextMiddleware
 from .mcp_server import mcp
+from .irrigation.supervisor_loop import start_supervisor_loop, stop_supervisor_loop
 from .services.rachio import get_rachio_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging(get_settings())          # dual-mode structlog pipeline
+    settings = get_settings()
+    configure_logging(settings)          # dual-mode structlog pipeline
     log = get_logger("app")
     log.info("app.startup", version=app.version)
     try:
-        await db.apply_startup_ddl(get_settings())   # additive, idempotent
+        await db.apply_startup_ddl(settings)   # additive, idempotent
     except Exception:  # noqa: BLE001 - don't crash the app if the DB is down
         log.warning("app.startup_ddl.failed", exc_info=True)
-    await report_model_availability(get_settings())   # log missing Ollama models
+    await report_model_availability(settings)   # log missing Ollama models
+    supervisor_task = await start_supervisor_loop(settings)
     yield
+    await stop_supervisor_loop(supervisor_task)
     await db.dispose_all()
     await close_checkpointers()
     try:

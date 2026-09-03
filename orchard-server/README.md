@@ -168,8 +168,16 @@ wizard** (dynamic date form); the `/trees` list has a per-row Care Plan button
 
 The water-saving deliberation engine that intercepts the baseline Rachio
 schedule. Phase 1 = data plumbing; Phase 2 = the Supervisor node; Phase 3 =
-the zone-contention solver + HITL approval + the `/irrigation` UI. An external
-CRON still has to fire `POST /api/v1/irrigation/supervisor/run` on a cadence.
+the zone-contention solver + HITL approval + the `/irrigation` UI.
+
+**Autonomous supervisor:** while the API process is up, an in-process asyncio
+loop ([app/irrigation/supervisor_loop.py](app/irrigation/supervisor_loop.py))
+ticks on ``supervisor_frequency_hours`` (DB, default 24; editable in the UI
+without restart) and calls the same ``IrrigationSupervisorService.run`` as the
+manual button. ``docker compose up`` or uvicorn is enough — leave the process
+running overnight. Set ``ORCHARD_SUPERVISOR_LOOP=0`` to disable (``pytest`` does
+this in ``conftest.py``). The **Run Supervision Task** button still works for
+demos and on-demand runs.
 
 - `tree` gained `estimated_gph` (whole-tree drip delivery, gal/hour) and
   `wetted_area_m2` (grower estimate of the soil area the emitters wet).
@@ -251,7 +259,7 @@ CRON still has to fire `POST /api/v1/irrigation/supervisor/run` on a cadence.
 | ------ | ---- | --- |
 | `GET`  | `/api/v1/irrigation/overview` | schedule + supervisor config + queue size |
 | `PUT`  | `/api/v1/irrigation/config/supervisor` · `/config/zones/{id}` | edit config |
-| `POST` | `/api/v1/irrigation/supervisor/run` | run the deliberation now (CRON hits this) |
+| `POST` | `/api/v1/irrigation/supervisor/run` | run the deliberation now (same path as the in-process loop) |
 | `GET`  | `/api/v1/irrigation/proposals?status=pending` | the HITL queue |
 | `POST` | `/api/v1/irrigation/proposals/{thread_id}/approve` · `/reject` | resume / abort the graph |
 
