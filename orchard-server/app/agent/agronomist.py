@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..core.logging import get_logger
+from ..core.tracing import traced
 from .care_plan import CATEGORIES, scale
 from ..services.exceptions import LLMUnavailable
 from ..services.source_service import FusedSource, SourceService
@@ -95,6 +96,7 @@ class AgronomistResult(TypedDict):
     source_ids: list[int]
 
 
+@traced("agronomist.answer")
 async def run_agronomist(
     question: str,
     *,
@@ -154,13 +156,31 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "- interval_days: how often it recurs (integer days; seasonal jobs -> ~90/"
     "180/365).\n"
     "- priority_score: 0-10, how important skipping it is (safety/disease high).\n"
-    "- baseline_question: if the first due date depends on when it was last "
-    "done, a short question to ask the grower (e.g. 'When was copper fungicide "
-    "last applied?'); otherwise null.\n\n"
+    "- baseline_question: ALWAYS provide one - a short, task-specific question "
+    "asking when THIS exact job was last done, so the first due date can be "
+    "counted from there. Name the actual product / cut / operation you chose "
+    "(e.g. 'When was copper fungicide last applied for anthracnose?', 'When was "
+    "the last dormant-season structural prune?'). Never leave it blank.\n\n"
     "Do NOT invent quantities, minutes, or product volumes - the system scales "
     "those from the tree's measured size. Do NOT include one-off establishment "
     "tasks. Prefer the grower's linked notes for timing and product choices."
 )
+
+
+# Last-resort fallback only: the prompt tells the model to ALWAYS write a
+# task-specific baseline_question. This generic per-category phrasing is used
+# just for the rare row where the model still returns nothing.
+_BASELINE_QUESTION: dict[str, str] = {
+    "fertilize": "When did you last fertilize this tree?",
+    "mulch": "When was mulch or compost last applied?",
+    "prune": "When was this tree last pruned?",
+    "spray": "When was this spray last applied?",
+    "scout": "When did you last scout this tree for pests or disease?",
+    "weed": "When was the tree ring last weeded?",
+    "soil_test": "When was the soil last tested?",
+    "stake": "When were the stakes and ties last checked?",
+    "irrigation": "When did you last check this tree's irrigation?",
+}
 
 
 class _PlanItem(BaseModel):
@@ -184,6 +204,7 @@ class CarePlanDraft(TypedDict):
     source_ids: list[int]
 
 
+@traced("agronomist.care_plan")
 async def generate_care_plan(
     *,
     tree: dict,
@@ -240,6 +261,9 @@ async def generate_care_plan(
             height_m=float(height) if height is not None else None,
             spread_m=float(spread) if spread is not None else None,
         )
+        question = (item.baseline_question or "").strip() or _BASELINE_QUESTION.get(
+            item.category, f"When was '{item.name.strip()}' last done?"
+        )
         templates.append(
             {
                 "name": item.name.strip(),
@@ -250,7 +274,7 @@ async def generate_care_plan(
                 "priority_score": float(item.priority_score),
                 "required_resources": scaled.required_resources,
                 "resource_plan": [r.as_dict() for r in scaled.resource_plan],
-                "baseline_question": (item.baseline_question or "").strip() or None,
+                "baseline_question": question,
                 "source_ids": source_ids,
             }
         )

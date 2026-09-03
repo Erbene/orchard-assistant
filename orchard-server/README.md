@@ -213,6 +213,15 @@ general-knowledge block). The tool surface from chat is **router +
 **Ollama is required**: `/api/v1/chat` returns **503** when it is unreachable
 (routing cannot be templated). The interactive scheduler is the Foreman ↓.
 
+**Tracing.** Set `LANGCHAIN_TRACING_V2=true` + `LANGCHAIN_API_KEY` and every
+`ChatOllama` call and LangGraph run streams to LangSmith. `app/core/tracing.py`
+adds named spans for the steps LangChain doesn't auto-instrument —
+`kb.search` (the Chroma retrieval, `run_type="retriever"`), `agronomist.answer`,
+`agronomist.care_plan`, `orchestrator.classify` — so an agronomy trace reads
+`agronomist.answer › [kb.search, ChatOllama]` instead of two disconnected LLM
+calls. Wiring / secret args (`settings`, `sources`, the DB connection) are
+stripped from logged inputs. Tests force tracing off (`conftest.py`).
+
 ### Foreman — interactive JIT scheduling (Phase 4)
 
 [app/agent/foreman.py](app/agent/foreman.py) is a **checkpointed two-interrupt

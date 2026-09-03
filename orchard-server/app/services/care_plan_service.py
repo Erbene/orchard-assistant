@@ -131,6 +131,9 @@ class CarePlanService:
     async def apply_baseline(
         self, tree_id: int, answers: list[BaselineAnswer]
     ) -> list[TaskRead]:
+        """Turn "last done" answers into the first scheduled task per template.
+        Re-runnable: a template that already has an open task is rescheduled
+        (not duplicated) when its anchor changes."""
         await self._require_tree(tree_id)
         by_id = {a.template_id: a for a in answers}
         created: list[TaskRead] = []
@@ -145,10 +148,17 @@ class CarePlanService:
             else:
                 anchor = tmpl["anchor_date"]
 
-            if await self._tasks.open_for_template(tmpl["id"]) is not None:
-                continue  # already materialised
+            due = _midnight_utc(
+                (anchor or date.today()) + timedelta(days=tmpl["interval_days"])
+            )
+            open_task = await self._tasks.open_for_template(tmpl["id"])
+            if open_task is not None:
+                if open_task["scheduled_date"] != due:
+                    await self._tasks.update(
+                        open_task["id"], {"scheduled_date": due}
+                    )
+                continue
 
-            base = anchor or date.today()
             row = await self._tasks.create(
                 {
                     "tree_id": tree_id,
@@ -156,9 +166,7 @@ class CarePlanService:
                     "action_type": tmpl["name"],
                     "status": "pending",
                     "priority_score": tmpl["priority_score"],
-                    "scheduled_date": _midnight_utc(
-                        base + timedelta(days=tmpl["interval_days"])
-                    ),
+                    "scheduled_date": due,
                     "estimated_minutes": tmpl["estimated_minutes"],
                     "required_resources": tmpl["required_resources"],
                 }

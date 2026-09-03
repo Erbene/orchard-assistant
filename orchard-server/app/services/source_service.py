@@ -11,6 +11,7 @@ from typing import TypedDict
 
 from ..config import Settings
 from ..core.logging import get_logger
+from ..core.tracing import traced
 from ..rag.chunking import chunk_text
 from ..rag.extract import UnsupportedFileType, extract_text
 from ..rag.vector_store import OrchardVectorStore
@@ -140,6 +141,7 @@ class SourceService:
 
     # -- retrieval --------------------------------------------
 
+    @traced("kb.search", run_type="retriever")
     async def search(
         self, query: str, *, source_ids: list[int] | None = None, per_source: int = 4
     ) -> list[FusedSource]:

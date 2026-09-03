@@ -19,6 +19,7 @@ langgraph>=1.2,<2
 langchain-core>=1.0,<2
 langchain-mcp-adapters>=0.3,<1
 langchain-ollama>=1.0,<2          # local LLM (Foreman narration) - optional at runtime
+langsmith>=0.1,<1                 # tracing (app/core/tracing.py); opt-in via LANGCHAIN_TRACING_V2
 langgraph-checkpoint-postgres>=3,<4
 psycopg[binary,pool]>=3.2
 

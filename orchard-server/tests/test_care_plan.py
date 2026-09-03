@@ -131,8 +131,14 @@ def test_generate_scales_from_height_then_baseline_materialises_tasks():
 
         assert len(plan.templates) == 3
         assert plan.generated and plan.pending_task_count == 0
-        # baseline question only for the fertilize item
-        assert [q.name for q in plan.baseline_questions] == ["Nitrogen feed"]
+        # every template gets a baseline question (LLM phrasing or a default)
+        assert {q.name for q in plan.baseline_questions} == {
+            "Nitrogen feed", "Structural prune", "Pest scouting"
+        }
+        feed_q = next(q for q in plan.baseline_questions if q.name == "Nitrogen feed")
+        assert feed_q.question == "When did you last fertilize?"   # LLM-supplied
+        prune_q = next(q for q in plan.baseline_questions if q.name == "Structural prune")
+        assert "prune" in prune_q.question.lower()                 # synthesized default
         feed = next(t for t in plan.templates if t.name == "Nitrogen feed")
         assert feed.estimated_minutes > 0
         assert any("fertilizer" in r.name.lower() for r in feed.resource_plan)
@@ -159,6 +165,16 @@ def test_generate_scales_from_height_then_baseline_materialises_tasks():
         # re-running baseline is idempotent (one open task per template)
         again = await svc.apply_baseline(tid, [])
         assert again == []
+
+        # adjusting a date reschedules the existing open task, no duplicate
+        newer = date.today() - timedelta(days=2)
+        assert await svc.apply_baseline(
+            tid, [BaselineAnswer(template_id=feed.id, last_done=newer)]
+        ) == []
+        open_feed = await tasks_repo.open_for_template(feed.id)
+        assert open_feed["scheduled_date"].date() == newer + timedelta(days=90)
+        rows = await tasks_repo.list(tree_id=tid)
+        assert len([t for t in rows if t["template_id"] == feed.id]) == 1
 
     _run(body)
 

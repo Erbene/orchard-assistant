@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..core.logging import get_logger
+from ..core.tracing import traced
 from ..services.exceptions import LLMUnavailable
 
 _log = get_logger("app.orchestrator")
@@ -105,6 +106,7 @@ def last_user_text(messages: Sequence[Any]) -> str:
     return ""
 
 
+@traced("orchestrator.classify")
 async def classify(messages: Sequence[Any], *, settings: Settings) -> Classification:
     llm = ChatOllama(
         model=settings.agent_model,
