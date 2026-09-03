@@ -40,6 +40,7 @@ from .services.source_service import SourceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
 from .services.validators import get_default_validation_agent
+from .tools import irrigation as _irrigation_tools
 
 mcp = FastMCP("Orchard Management Server")
 
@@ -141,6 +142,30 @@ async def trigger_rachio_watering(zone_id: str, duration_minutes: int) -> str:
     except DomainError as exc:
         raise ToolError(str(exc)) from exc
     return f"Started watering Rachio zone {zone_id} for {minutes} minute(s)."
+
+
+# ---------------------------------------------------------------------------
+# Tools - irrigation supervisor actions (Phase 2; STUBBED execution)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def rachio_skip_schedule(zone_id: str, days: int) -> dict:
+    """Pause a Rachio zone's baseline schedule for ``days`` days - the
+    water-saving action when rain covers demand. Phase 2: logged, not executed."""
+    return _irrigation_tools.rachio_skip_schedule(zone_id, days).as_dict()
+
+
+@mcp.tool()
+def pass_no_action(zone_id: str) -> dict:
+    """Take no action on ``zone_id`` - defer to its baseline Rachio schedule."""
+    return _irrigation_tools.pass_no_action(zone_id).as_dict()
+
+
+@mcp.tool()
+def start_zone_watering(zone_id: str, duration_minutes: int) -> dict:
+    """Force an immediate emergency run of ``zone_id``. Phase 2: logged, not
+    executed (use ``trigger_rachio_watering`` for the real hardware write)."""
+    return _irrigation_tools.start_zone_watering(zone_id, duration_minutes).as_dict()
 
 
 # ---------------------------------------------------------------------------

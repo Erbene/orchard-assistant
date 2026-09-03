@@ -111,7 +111,8 @@ class CarePlanService:
                 "required_resources": updated["required_resources"],
             }
             if "interval_days" in fields:
-                base = updated["anchor_date"] or (open_task["created_at"].date())
+                # same base as apply_baseline: the anchor, else "today"
+                base = updated["anchor_date"] or date.today()
                 task_patch["scheduled_date"] = _midnight_utc(
                     base + timedelta(days=updated["interval_days"])
                 )

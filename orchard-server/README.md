@@ -164,6 +164,53 @@ wizard** (dynamic date form); the `/trees` list has a per-row Care Plan button
 (`GET /trees` returns `has_care_plan`). `/schedule` is the **task inbox**;
 "Plan a work session" opens the Foreman JIT wizard in a dialog.
 
+### Irrigation workflow — Phase 1 ([app/irrigation/](app/irrigation/))
+
+The water-saving deliberation engine. **Services only — no HTTP routes yet**
+(the CRON triggers land in Phase 3). Phase 1 = data plumbing; Phase 2 = the
+Supervisor that intercepts the baseline Rachio schedule.
+
+- `tree` gained `estimated_gph` (total drip delivery, gal/hour).
+- **`moisture_sensor`** (`id` PK, `label`, nullable `tree_id` FK + `zone_id`) —
+  a probe maps to a tree, a Rachio zone, or both. `MoistureSensorService.tree_moisture(tree_id)`
+  resolves a tree's effective VWC: its own sensors' mean, else its zone's, else `none`.
+- **`app/irrigation/hardware.py`** — stub reads: `get_moisture(sensor_id)`
+  (deterministic-per-id VWC % with seasonal drift), `get_rain_bucket_24h()`
+  (mm). `set_moisture` / `set_rain_bucket_24h` / `reset` override registry for
+  tests + the Phase 2 harness.
+- **`app/irrigation/weather.py`** — real **NWS** (`api.weather.gov`, no key,
+  needs `NWS_USER_AGENT`): `forecast(settings)` → ~7 days of quantitative
+  precip (mm), PoP, temps from the **gridpoint** product; `observed_rain_mm(settings, day)`
+  → nearest-station 24h observed total. `ORCHARD_LAT`/`ORCHARD_LON` unset →
+  `{"available": false}` (non-fatal). `/points` cached forever, forecast ~1 h.
+- **`rainfall_forecast_log`** (one row per `for_date`) + `RainfallForecastService`:
+  `roll(today)` writes the 1/3/5-day-ahead QPF for `today+{1,3,5}` and backfills
+  yesterday's actuals (`actual_nws_mm` observed + `actual_gauge_mm` from the
+  bucket stub); `accuracy(since)` → MAE / bias / rain-hit-rate per horizon.
+
+**Phase 2 — the Supervisor** (still services only, no routes):
+
+- **[app/services/water_balance.py](app/services/water_balance.py)** — the
+  *deterministic* sensor-fusion pre-processing. Per tree:
+  `deficit_score = (target_vwc − current_vwc) − rain_24h_mm − forecast_rain_24h_mm`
+  (higher = drier). `target_vwc` is **growth-stage aware**
+  ([app/irrigation/phenology.py](app/irrigation/phenology.py) — a coarse
+  month→stage map, stopgap for the parked biological-calendar brief).
+  `for_zone` aggregates to `max` deficit (protect the driest tree). The LLM
+  never does the arithmetic.
+- **[app/tools/irrigation.py](app/tools/irrigation.py)** — the three actions,
+  **stubbed** (log + `print`, `dry_run=True`): `rachio_skip_schedule(zone, days)`,
+  `pass_no_action(zone)`, `start_zone_watering(zone, minutes)`. Also registered
+  on the MCP server.
+- **[app/agent/irrigation_supervisor.py](app/agent/irrigation_supervisor.py)** —
+  a LangGraph node (`START → deliberate → execute → END`, async, no checkpointer).
+  `deliberate` = `AGENT_MODEL` `.with_structured_output` picking one action from
+  the deficit score + per-tree stages (prompt = "agronomic safety net, objective
+  SAVE WATER; the baseline controller is blind to soil moisture"); `execute`
+  dispatches the tool. LLM down → `pass_no_action` (defer to baseline — a CRON
+  job must not crash). `IrrigationSupervisorService.run_daily()` is the CRON
+  entrypoint (Phase 3 wires the trigger); `run_for_zone(zone)` for one zone.
+
 **Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
 applied once when the `postgres` container's volume is first created (and by
 `tests/conftest.py` against the disposable `orchard_test` database). Additive

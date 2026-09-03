@@ -21,7 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from .config import Settings, get_settings
 from .core import db
 from .rag.vector_store import OrchardVectorStore, get_vector_store
+from .agent.irrigation_supervisor import IrrigationSupervisorService
+from .irrigation.forecast_log import RainfallForecastService
+from .irrigation.sensors import MoistureSensorService
 from .repositories.conversation_repository import ConversationRepository
+from .repositories.moisture_sensor_repository import MoistureSensorRepository
+from .repositories.rainfall_forecast_repository import RainfallForecastRepository
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.task_template_repository import TaskTemplateRepository
@@ -33,6 +38,7 @@ from .services.care_plan_service import CarePlanService
 from .services.conversation_service import ConversationService
 from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
+from .services.water_balance import WaterBalanceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
 from .services.validators import ValidationAgent, get_default_validation_agent
@@ -67,6 +73,18 @@ def get_task_template_repository(
     conn: AsyncConnection = Depends(get_connection),
 ) -> TaskTemplateRepository:
     return TaskTemplateRepository(conn)
+
+
+def get_moisture_sensor_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> MoistureSensorRepository:
+    return MoistureSensorRepository(conn)
+
+
+def get_rainfall_forecast_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> RainfallForecastRepository:
+    return RainfallForecastRepository(conn)
 
 
 def get_conversation_repository(
@@ -145,6 +163,38 @@ def get_care_plan_service(
     settings: Settings = Depends(get_settings_dep),
 ) -> CarePlanService:
     return CarePlanService(templates, tasks, trees, sources, settings)
+
+
+# -- irrigation (Phase 1: services only, no routes yet) --------------
+
+def get_moisture_sensor_service(
+    sensors: MoistureSensorRepository = Depends(get_moisture_sensor_repository),
+    trees: TreeRepository = Depends(get_tree_repository),
+) -> MoistureSensorService:
+    return MoistureSensorService(sensors, trees)
+
+
+def get_rainfall_forecast_service(
+    log: RainfallForecastRepository = Depends(get_rainfall_forecast_repository),
+    settings: Settings = Depends(get_settings_dep),
+) -> RainfallForecastService:
+    return RainfallForecastService(log, settings)
+
+
+def get_water_balance_service(
+    sensors: MoistureSensorService = Depends(get_moisture_sensor_service),
+    trees: TreeRepository = Depends(get_tree_repository),
+    settings: Settings = Depends(get_settings_dep),
+) -> WaterBalanceService:
+    return WaterBalanceService(sensors, trees, settings)
+
+
+def get_irrigation_supervisor_service(
+    water: WaterBalanceService = Depends(get_water_balance_service),
+    trees: TreeRepository = Depends(get_tree_repository),
+    settings: Settings = Depends(get_settings_dep),
+) -> IrrigationSupervisorService:
+    return IrrigationSupervisorService(water, trees, settings)
 
 
 def get_chat_service(
