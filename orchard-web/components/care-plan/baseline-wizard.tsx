@@ -15,11 +15,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, carePlanApi } from "@/lib/api";
-import type { BaselineQuestion } from "@/lib/types";
+import type { BaselineQuestion, TaskTemplate, TreePhenology } from "@/lib/types";
+import {
+  MonthMultiSelect,
+  phenologyListsFromRead,
+} from "./month-multi-select";
 
 interface Props {
   treeId: number;
   questions: BaselineQuestion[];
+  phenology: TreePhenology;
+  templates: TaskTemplate[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Fired after the first recurring tasks are created. */
@@ -27,6 +33,12 @@ interface Props {
 }
 
 type Answer = { date: string; unknown: boolean };
+
+type MonthState = {
+  flowering: number[];
+  harvest: number[];
+  dormancy: number[];
+};
 
 /**
  * Dynamic form built from the Agronomist's baseline questions. For each task
@@ -37,17 +49,27 @@ type Answer = { date: string; unknown: boolean };
 export function BaselineWizard({
   treeId,
   questions,
+  phenology,
+  templates,
   open,
   onOpenChange,
   onScheduled,
 }: Props) {
   const toast = useToast();
   const [answers, setAnswers] = React.useState<Record<number, Answer>>({});
+  const [months, setMonths] = React.useState<MonthState>(() =>
+    phenologyListsFromRead(phenology),
+  );
   const [submitting, setSubmitting] = React.useState(false);
 
+  const hasBiologicalTemplates = templates.some((t) => t.biological_anchor);
+
   React.useEffect(() => {
-    if (open) setAnswers({});
-  }, [open]);
+    if (open) {
+      setAnswers({});
+      setMonths(phenologyListsFromRead(phenology));
+    }
+  }, [open, phenology]);
 
   const set = (id: number, patch: Partial<Answer>) =>
     setAnswers((a) => {
@@ -65,7 +87,17 @@ export function BaselineWizard({
           last_done: a && !a.unknown && a.date ? a.date : null,
         };
       });
-      const tasks = await carePlanApi.baseline(treeId, payload);
+      const phenologyPayload = hasBiologicalTemplates
+        ? {
+            flowering_months: months.flowering,
+            harvest_months: months.harvest,
+            dormancy_months: months.dormancy,
+            flowering_month: months.flowering[0] ?? null,
+            harvest_month: months.harvest[0] ?? null,
+            dormancy_month: months.dormancy[0] ?? null,
+          }
+        : undefined;
+      const tasks = await carePlanApi.baseline(treeId, payload, phenologyPayload);
       toast.success(
         "Schedule ready",
         `${tasks.length} recurring task${tasks.length === 1 ? "" : "s"} created.`,
@@ -95,6 +127,33 @@ export function BaselineWizard({
         </DialogHeader>
 
         <div className="max-h-[55vh] space-y-4 overflow-y-auto py-1">
+          {hasBiologicalTemplates && (
+            <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+              <p className="text-sm font-medium">When does this tree typically…</p>
+              <p className="text-xs text-muted-foreground">
+                Some plants flower twice a year — select every month this tree
+                typically does. Confirm or adjust the Agronomist&rsquo;s defaults.
+              </p>
+              <MonthMultiSelect
+                label="Flower"
+                selected={months.flowering}
+                onChange={(flowering) =>
+                  setMonths((m) => ({ ...m, flowering }))
+                }
+              />
+              <MonthMultiSelect
+                label="Harvest"
+                selected={months.harvest}
+                onChange={(harvest) => setMonths((m) => ({ ...m, harvest }))}
+              />
+              <MonthMultiSelect
+                label="Dormancy"
+                selected={months.dormancy}
+                onChange={(dormancy) => setMonths((m) => ({ ...m, dormancy }))}
+              />
+            </div>
+          )}
+
           {questions.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               This plan has no date-dependent tasks — everything will be

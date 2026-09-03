@@ -1,6 +1,7 @@
 """Raw persistence for the ``tree`` table."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import text
@@ -20,8 +21,41 @@ _COLUMNS = (
     "canopy_spread_m",
     "estimated_gph",
     "wetted_area_m2",
+    "expected_flowering_month",
+    "expected_harvest_month",
+    "expected_dormancy_month",
+    "expected_flowering_months",
+    "expected_harvest_months",
+    "expected_dormancy_months",
+)
+_JSON_COLUMNS = (
+    "expected_flowering_months",
+    "expected_harvest_months",
+    "expected_dormancy_months",
 )
 _MUTABLE = tuple(c for c in _COLUMNS if c != "tree_id")
+
+
+def _encode(fields: Row) -> Row:
+    out = dict(fields)
+    for col in _JSON_COLUMNS:
+        if col in out and not isinstance(out[col], str):
+            out[col] = json.dumps(out[col] if out[col] is not None else [])
+    return out
+
+
+def _decode(row: Row) -> Row:
+    for col in _JSON_COLUMNS:
+        value = row.get(col)
+        if isinstance(value, str):
+            row[col] = json.loads(value)
+        elif value is None:
+            row[col] = []
+    return row
+
+
+def _placeholder(col: str) -> str:
+    return f"CAST(:{col} AS jsonb)" if col in _JSON_COLUMNS else f":{col}"
 
 
 class TreeRepository:
@@ -49,14 +83,14 @@ class TreeRepository:
             ),
             params,
         )
-        return [dict(r) for r in result.mappings().all()]
+        return [_decode(dict(r)) for r in result.mappings().all()]
 
     async def get(self, tree_id: int) -> Row | None:
         result = await self._conn.execute(
             text("SELECT * FROM tree WHERE tree_id = :id"), {"id": tree_id}
         )
         row = result.mappings().first()
-        return dict(row) if row is not None else None
+        return _decode(dict(row)) if row is not None else None
 
     async def distinct_zone_ids(self) -> list[str]:
         """Non-null zone ids that have at least one tree (irrigation supervisor)."""
@@ -79,23 +113,25 @@ class TreeRepository:
 
     async def create(self, data: Row) -> Row:
         # Insert every mutable column, plus tree_id when the caller supplied one.
-        cols = list(_MUTABLE)
-        if data.get("tree_id") is not None:
-            cols = ["tree_id", *cols]
-        placeholders = ", ".join(f":{c}" for c in cols)
-        params = {c: data.get(c) for c in cols}
+        payload = _encode(data)
+        cols = [c for c in _MUTABLE if c in payload]
+        if payload.get("tree_id") is not None:
+            cols = ["tree_id", *[c for c in cols if c != "tree_id"]]
+        placeholders = ", ".join(_placeholder(c) for c in cols)
+        params = {c: payload.get(c) for c in cols}
         result = await self._conn.execute(
             text(
                 f"INSERT INTO tree ({', '.join(cols)}) VALUES ({placeholders}) RETURNING *"
             ),
             params,
         )
-        return dict(result.mappings().one())
+        return _decode(dict(result.mappings().one()))
 
     async def update(self, tree_id: int, fields: Row) -> Row | None:
-        allowed = {k: v for k, v in fields.items() if k in _MUTABLE}
+        payload = _encode(fields)
+        allowed = {k: v for k, v in payload.items() if k in _MUTABLE}
         if allowed:
-            assignments = ", ".join(f"{k} = :{k}" for k in allowed)
+            assignments = ", ".join(f"{k} = {_placeholder(k)}" for k in allowed)
             await self._conn.execute(
                 text(f"UPDATE tree SET {assignments} WHERE tree_id = :tree_id"),
                 {**allowed, "tree_id": tree_id},

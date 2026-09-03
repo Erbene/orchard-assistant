@@ -7,7 +7,7 @@ is free text; ``status`` is a state-machine field constrained to
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -96,6 +96,8 @@ class TaskRead(TaskBase):
     status: TaskStatus
     created_at: datetime
     completed_at: datetime | None = None
+    window_closes_on: date | None = None
+    out_of_season: bool = False
 
 
 class InboxResourceLine(BaseModel):
@@ -113,3 +115,5 @@ class InboxTaskRead(TaskRead):
     template_resource_plan: list[InboxResourceLine] = Field(default_factory=list)
     tree_species: str
     tree_variety: str
+    window_closes_on: date | None = None
+    out_of_season: bool = False

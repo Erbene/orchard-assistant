@@ -13,8 +13,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, carePlanApi, treesApi } from "@/lib/api";
-import type { CarePlan, RateClass, TaskTemplate, Tree } from "@/lib/types";
+import type { CarePlan, RateClass, TaskTemplate, Tree, TreePhenology } from "@/lib/types";
 import { BaselineWizard } from "./baseline-wizard";
+import { MonthStrip, constraintCaption } from "./month-strip";
+import {
+  MonthMultiSelect,
+  phenologyListsFromTree,
+  phenologyListsFromRead,
+} from "./month-multi-select";
 
 const RATE_CLASSES: RateClass[] = ["light", "standard", "heavy"];
 
@@ -80,16 +86,30 @@ export function CarePlanTab({
 
   return (
     <div className="space-y-6">
-      <TreeDimensions
-        tree={tree}
-        onSaved={(t) => {
-          setTree(t);
-          toast.success(
-            "Dimensions updated",
-            "Regenerate the plan to rescale amounts.",
-          );
-        }}
-      />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TreeDimensions
+          tree={tree}
+          onSaved={(t) => {
+            setTree(t);
+            toast.success(
+              "Dimensions updated",
+              "Regenerate the plan to rescale amounts.",
+            );
+          }}
+        />
+        <BiologicalCalendar
+          tree={tree}
+          onSaved={async (t) => {
+            setTree(t);
+            const p = await carePlanApi.get(treeId);
+            setPlan(p);
+            toast.success(
+              "Biological calendar updated",
+              "Month strips reflect the new flowering / harvest / dormancy dates.",
+            );
+          }}
+        />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -146,6 +166,7 @@ export function CarePlanTab({
             <TemplateRow
               key={t.id}
               template={t}
+              phenology={plan.phenology}
               onChanged={(next) =>
                 setPlan((p) =>
                   p
@@ -177,6 +198,8 @@ export function CarePlanTab({
       <BaselineWizard
         treeId={treeId}
         questions={plan.baseline_questions}
+        phenology={plan.phenology}
+        templates={plan.templates}
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         onScheduled={() => load()}
@@ -271,12 +294,101 @@ function TreeDimensions({
 
 // --------------------------------------------------------------------------
 
+function BiologicalCalendar({
+  tree,
+  onSaved,
+}: {
+  tree: Tree;
+  onSaved: (t: Tree) => void | Promise<void>;
+}) {
+  const toast = useToast();
+  const initial = phenologyListsFromTree(tree);
+  const [flowering, setFlowering] = React.useState<number[]>(initial.flowering);
+  const [harvest, setHarvest] = React.useState<number[]>(initial.harvest);
+  const [dormancy, setDormancy] = React.useState<number[]>(initial.dormancy);
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    const next = phenologyListsFromTree(tree);
+    setFlowering(next.flowering);
+    setHarvest(next.harvest);
+    setDormancy(next.dormancy);
+  }, [tree]);
+
+  const dirty =
+    JSON.stringify(flowering) !== JSON.stringify(initial.flowering) ||
+    JSON.stringify(harvest) !== JSON.stringify(initial.harvest) ||
+    JSON.stringify(dormancy) !== JSON.stringify(initial.dormancy);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await onSaved(
+        await treesApi.update(tree.tree_id, {
+          expected_flowering_months: flowering,
+          expected_harvest_months: harvest,
+          expected_dormancy_months: dormancy,
+          expected_flowering_month: flowering[0] ?? null,
+          expected_harvest_month: harvest[0] ?? null,
+          expected_dormancy_month: dormancy[0] ?? null,
+        }),
+      );
+    } catch (err) {
+      toast.error(
+        "Could not save biological calendar",
+        err instanceof ApiError ? err.detail : undefined,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+      <div>
+        <h3 className="text-sm font-semibold">Biological calendar</h3>
+        <p className="text-xs text-muted-foreground">
+          Some plants flower twice a year — select every month this tree
+          typically does.
+        </p>
+      </div>
+      <MonthMultiSelect
+        label="Flower"
+        selected={flowering}
+        onChange={setFlowering}
+      />
+      <MonthMultiSelect
+        label="Harvest"
+        selected={harvest}
+        onChange={setHarvest}
+      />
+      <MonthMultiSelect
+        label="Dormancy"
+        selected={dormancy}
+        onChange={setDormancy}
+      />
+      {dirty && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={save} disabled={saving}>
+            {saving && <Loader2 className="size-3.5 animate-spin" />}
+            Save
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+
 function TemplateRow({
   template,
+  phenology,
   onChanged,
   onDeleted,
 }: {
   template: TaskTemplate;
+  phenology: TreePhenology;
   onChanged: (t: TaskTemplate) => void;
   onDeleted: () => void;
 }) {
@@ -343,6 +455,16 @@ function TemplateRow({
       setBusy(false);
     }
   }
+
+  const anchorMonths =
+    template.biological_anchor === "flowering"
+      ? phenologyListsFromRead(phenology).flowering
+      : template.biological_anchor === "harvest"
+        ? phenologyListsFromRead(phenology).harvest
+        : template.biological_anchor === "dormancy"
+          ? phenologyListsFromRead(phenology).dormancy
+          : [];
+  const caption = constraintCaption(template);
 
   return (
     <li className="rounded-lg border p-3">
@@ -436,6 +558,19 @@ function TemplateRow({
           <Trash2 className="size-4" />
         </Button>
       </div>
+
+      {(template.valid_months.length > 0 || template.biological_anchor) && (
+        <div className="mt-2 space-y-1 pl-1">
+          <MonthStrip
+            validMonths={template.valid_months}
+            anchorMonths={anchorMonths}
+            anchorOffsetDays={template.anchor_offset_days}
+          />
+          {caption && (
+            <p className="text-[11px] text-muted-foreground">{caption}</p>
+          )}
+        </div>
+      )}
 
       {template.resource_plan.length > 0 && (
         <p className="mt-2 pl-1 text-xs text-muted-foreground">

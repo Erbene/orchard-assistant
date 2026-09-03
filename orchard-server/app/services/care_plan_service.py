@@ -12,9 +12,11 @@ task; completed / skipped history is never touched.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 
 from ..agent.agronomist import generate_care_plan, rescale_template
+from ..agent.schedule_solver import months_from_tree, next_due
+from ..schemas.tree import _normalize_month_list
 from ..repositories.task_repository import TaskRepository
 from ..repositories.task_template_repository import TaskTemplateRepository
 from ..repositories.tree_repository import TreeRepository
@@ -24,16 +26,39 @@ from ..schemas.care_plan import (
     CarePlan,
     TaskTemplateRead,
     TaskTemplateUpdate,
+    TreePhenologyRead,
 )
 from ..schemas.task import TaskRead
 from .exceptions import NotFoundError
 from .source_service import SourceService
 
 _RESCALE_TRIGGERS = {"category", "rate_class"}
+_SCHEDULE_TRIGGERS = {
+    "interval_days", "valid_months", "biological_anchor", "anchor_offset_days",
+}
 
 
 def _midnight_utc(d: date) -> datetime:
     return datetime.combine(d, time(), tzinfo=timezone.utc)
+
+
+def _phenology_read(tree: dict) -> TreePhenologyRead:
+    return TreePhenologyRead.from_tree_row(tree)
+
+
+def _schedule_from_template(
+    template: dict, *, after: date, phenology
+) -> datetime:
+    outcome = next_due(
+        after=after,
+        interval_days=template["interval_days"],
+        valid_months=template.get("valid_months") or [],
+        biological_anchor=template.get("biological_anchor"),
+        anchor_offset_days=template.get("anchor_offset_days"),
+        phenology=phenology,
+    )
+    assert outcome.date is not None
+    return _midnight_utc(outcome.date)
 
 
 class CarePlanService:
@@ -54,7 +79,7 @@ class CarePlanService:
     # -- read ------------------------------------------------------
 
     async def get_plan(self, tree_id: int) -> CarePlan:
-        await self._require_tree(tree_id)
+        tree = await self._require_tree(tree_id)
         rows = await self._templates.list_for_tree(tree_id)
         pending = await self._tasks.list(status="pending", tree_id=tree_id)
         pending_from_plan = [t for t in pending if t.get("template_id")]
@@ -64,6 +89,7 @@ class CarePlanService:
             baseline_questions=self._questions(rows),
             pending_task_count=len(pending_from_plan),
             generated=bool(rows),
+            phenology=_phenology_read(tree),
         )
 
     # -- generate (Agronomist) -----------------------------------
@@ -74,6 +100,21 @@ class CarePlanService:
         draft = await generate_care_plan(
             tree=tree, sources=self._sources, settings=self._settings
         )
+
+        phenology_patch: dict = {}
+        for plural, singular, key in (
+            ("expected_flowering_months", "expected_flowering_month", "flowering_months"),
+            ("expected_harvest_months", "expected_harvest_month", "harvest_months"),
+            ("expected_dormancy_months", "expected_dormancy_month", "dormancy_months"),
+        ):
+            existing = tree.get(plural) or []
+            if not existing and tree.get(singular) is None:
+                months = _normalize_month_list(draft.get(key) or [])
+                if months:
+                    phenology_patch[plural] = months
+                    phenology_patch[singular] = months[0]
+        if phenology_patch:
+            tree = await self._trees.update(tree_id, phenology_patch) or tree
 
         # wipe the old plan's open tasks, then swap the templates
         for old in await self._templates.list_for_tree(tree_id):
@@ -110,11 +151,11 @@ class CarePlanService:
                 "estimated_minutes": updated["estimated_minutes"],
                 "required_resources": updated["required_resources"],
             }
-            if "interval_days" in fields:
-                # same base as apply_baseline: the anchor, else "today"
+            if _SCHEDULE_TRIGGERS & fields.keys():
+                tree = await self._trees.get(current["tree_id"]) or {}
                 base = updated["anchor_date"] or date.today()
-                task_patch["scheduled_date"] = _midnight_utc(
-                    base + timedelta(days=updated["interval_days"])
+                task_patch["scheduled_date"] = _schedule_from_template(
+                    updated, after=base, phenology=months_from_tree(tree)
                 )
             await self._tasks.update(open_task["id"], task_patch)
 
@@ -130,12 +171,49 @@ class CarePlanService:
     # -- baseline wizard -> first tasks ------------------------
 
     async def apply_baseline(
-        self, tree_id: int, answers: list[BaselineAnswer]
+        self,
+        tree_id: int,
+        answers: list[BaselineAnswer],
+        *,
+        flowering_month: int | None = None,
+        harvest_month: int | None = None,
+        dormancy_month: int | None = None,
+        flowering_months: list[int] | None = None,
+        harvest_months: list[int] | None = None,
+        dormancy_months: list[int] | None = None,
     ) -> list[TaskRead]:
         """Turn "last done" answers into the first scheduled task per template.
         Re-runnable: a template that already has an open task is rescheduled
         (not duplicated) when its anchor changes."""
-        await self._require_tree(tree_id)
+        tree = await self._require_tree(tree_id)
+        resolved = {
+            "flowering_months": _normalize_month_list(
+                flowering_months
+                or ([flowering_month] if flowering_month is not None else [])
+            ),
+            "harvest_months": _normalize_month_list(
+                harvest_months
+                or ([harvest_month] if harvest_month is not None else [])
+            ),
+            "dormancy_months": _normalize_month_list(
+                dormancy_months
+                or ([dormancy_month] if dormancy_month is not None else [])
+            ),
+        }
+        phenology_patch: dict = {}
+        for plural, singular, key in (
+            ("expected_flowering_months", "expected_flowering_month", "flowering_months"),
+            ("expected_harvest_months", "expected_harvest_month", "harvest_months"),
+            ("expected_dormancy_months", "expected_dormancy_month", "dormancy_months"),
+        ):
+            months = resolved[key]
+            if months:
+                phenology_patch[plural] = months
+                phenology_patch[singular] = months[0]
+        if phenology_patch:
+            tree = await self._trees.update(tree_id, phenology_patch) or tree
+
+        phenology = months_from_tree(tree)
         by_id = {a.template_id: a for a in answers}
         created: list[TaskRead] = []
 
@@ -149,8 +227,8 @@ class CarePlanService:
             else:
                 anchor = tmpl["anchor_date"]
 
-            due = _midnight_utc(
-                (anchor or date.today()) + timedelta(days=tmpl["interval_days"])
+            due = _schedule_from_template(
+                tmpl, after=anchor or date.today(), phenology=phenology
             )
             open_task = await self._tasks.open_for_template(tmpl["id"])
             if open_task is not None:

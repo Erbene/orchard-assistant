@@ -6,9 +6,11 @@ framework-neutral ``DomainError`` subclasses.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
+from ..agent.schedule_solver import compute_window_closes_on, months_from_tree, next_due
 from ..repositories.task_repository import TaskRepository
 from ..repositories.task_template_repository import TaskTemplateRepository
 from ..repositories.tree_repository import TreeRepository
@@ -25,6 +27,39 @@ from .exceptions import DomainValidationError, NotFoundError
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_date(value: datetime | date | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    return value
+
+
+def _phenology_from_tree(tree: dict):
+    return months_from_tree(tree)
+
+
+def _window_closes_on_row(row: dict) -> date | None:
+    scheduled = _as_date(row.get("scheduled_date"))
+    if scheduled is None:
+        return None
+    valid_months = row.get("template_valid_months")
+    if isinstance(valid_months, str):
+        valid_months = json.loads(valid_months)
+    if not valid_months:
+        return None
+    return compute_window_closes_on(scheduled, valid_months)
+
+
+def _enrich_window_fields(row: dict, *, today: date | None = None) -> dict:
+    d = dict(row)
+    closes = _window_closes_on_row(d)
+    d["window_closes_on"] = closes
+    today = today or date.today()
+    d["out_of_season"] = closes is not None and closes < today
+    return d
 
 
 class TaskService:
@@ -60,12 +95,15 @@ class TaskService:
         rows = await self._tasks.list_pending(
             scheduled_before=scheduled_before.date() if scheduled_before else None
         )
-        return [TaskRead.model_validate(r) for r in rows]
+        enriched = [_enrich_window_fields(row) for row in rows]
+        return [TaskRead.model_validate(r) for r in enriched]
 
     async def inbox(self) -> list[InboxTaskRead]:
         """The schedule inbox: pending tasks + template/tree labels + amounts,
         priority-then-date ordered."""
-        return [InboxTaskRead.model_validate(r) for r in await self._tasks.inbox()]
+        rows = [_enrich_window_fields(row) for row in await self._tasks.inbox()]
+        rows.sort(key=lambda r: r.get("out_of_season", False))
+        return [InboxTaskRead.model_validate(r) for r in rows]
 
     # -- writes -----------------------------------------------------
 
@@ -133,12 +171,22 @@ class TaskService:
             patch["completed_at"] = _now()
         closed = TaskRead.model_validate(await self._tasks.update(task_id, patch))
 
-        base = closed.scheduled_date or datetime.now(timezone.utc)
+        base = _as_date(closed.scheduled_date) or date.today()
         template = None
         if closed.template_id and self._templates is not None:
             template = await self._templates.get(closed.template_id)
 
         if template is not None:
+            tree = await self._trees.get(closed.tree_id) or {}
+            outcome = next_due(
+                after=base,
+                interval_days=template["interval_days"],
+                valid_months=template.get("valid_months") or [],
+                biological_anchor=template.get("biological_anchor"),
+                anchor_offset_days=template.get("anchor_offset_days"),
+                phenology=_phenology_from_tree(tree),
+            )
+            next_date = outcome.date or base
             await self._tasks.create(
                 {
                     "tree_id": closed.tree_id,
@@ -146,7 +194,9 @@ class TaskService:
                     "action_type": template["name"],
                     "status": "pending",
                     "priority_score": template["priority_score"],
-                    "scheduled_date": base + timedelta(days=template["interval_days"]),
+                    "scheduled_date": datetime.combine(
+                        next_date, datetime.min.time(), tzinfo=timezone.utc
+                    ),
                     "estimated_minutes": template["estimated_minutes"],
                     "required_resources": template["required_resources"],
                 }
@@ -158,7 +208,11 @@ class TaskService:
                     "action_type": closed.action_type,
                     "status": "pending",
                     "priority_score": closed.priority_score,
-                    "scheduled_date": base + timedelta(days=closed.frequency_days),
+                    "scheduled_date": datetime.combine(
+                        base + timedelta(days=closed.frequency_days),
+                        datetime.min.time(),
+                        tzinfo=timezone.utc,
+                    ),
                     "frequency_days": closed.frequency_days,
                     "estimated_minutes": closed.estimated_minutes,
                     "required_resources": closed.required_resources,

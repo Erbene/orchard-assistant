@@ -45,7 +45,16 @@ async def apply_baseline(
     payload: BaselineRequest,
     svc: CarePlanService = Depends(get_care_plan_service),
 ):
-    return await svc.apply_baseline(tree_id, payload.answers)
+    return await svc.apply_baseline(
+        tree_id,
+        payload.answers,
+        flowering_month=payload.flowering_month,
+        harvest_month=payload.harvest_month,
+        dormancy_month=payload.dormancy_month,
+        flowering_months=payload.flowering_months,
+        harvest_months=payload.harvest_months,
+        dormancy_months=payload.dormancy_months,
+    )
 
 
 @router.patch("/care-plan/templates/{template_id}", response_model=TaskTemplateRead)

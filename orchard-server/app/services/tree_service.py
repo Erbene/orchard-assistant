@@ -44,19 +44,9 @@ class TreeService:
         return self._to_read(row)
 
     async def create_tree(self, payload: TreeCreate) -> TreeRead:
-        record = {
-            "tree_id": payload.tree_id,
-            "species": await self._normalize("species", payload.species),
-            "variety": await self._normalize("variety", payload.variety),
-            "zone_id": payload.zone_id,          # free-text Rachio zone id, not validated
-            "planted_date": payload.planted_date,
-            "additional_context": payload.additional_context,
-            "notes": payload.notes,
-            "height_m": payload.height_m,
-            "canopy_spread_m": payload.canopy_spread_m,
-            "estimated_gph": payload.estimated_gph,
-            "wetted_area_m2": payload.wetted_area_m2,
-        }
+        record = payload.model_dump(exclude_unset=True)
+        record["species"] = await self._normalize("species", payload.species)
+        record["variety"] = await self._normalize("variety", payload.variety)
         try:
             row = await self._trees.create(record)
         except IntegrityError as exc:

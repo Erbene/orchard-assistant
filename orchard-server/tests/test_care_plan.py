@@ -235,6 +235,36 @@ def test_complete_respawns_next_from_template():
     _run(body)
 
 
+def test_apply_baseline_safety_skip_after_flowering_cutoff():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create({
+            "species": "mango", "variety": "Kent", "height_m": 3.0,
+            "expected_flowering_month": 9, "expected_harvest_month": 11,
+            "expected_flowering_months": [9], "expected_harvest_months": [11],
+        }))["tree_id"]
+        tmpl = await templates.create(tid, {
+            "name": "Nitrogen feed",
+            "category": "fertilize",
+            "rate_class": "standard",
+            "interval_days": 30,
+            "estimated_minutes": 20,
+            "priority_score": 6.0,
+            "required_resources": ["Balanced fertilizer (8-3-9)"],
+            "resource_plan": [],
+            "valid_months": [],
+            "biological_anchor": "flowering",
+            "anchor_offset_days": -30,
+        })
+        last = date(2026, 7, 15)
+        await svc.apply_baseline(
+            tid, [BaselineAnswer(template_id=tmpl["id"], last_done=last)]
+        )
+        open_task = await tasks_repo.open_for_template(tmpl["id"])
+        assert open_task["scheduled_date"].date() == date(2026, 11, 1)
+
+    _run(body)
+
+
 def test_delete_template_removes_its_open_task():
     async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
         tid = (await trees.create({"species": "mango", "variety": "Kent"}))["tree_id"]
@@ -248,6 +278,27 @@ def test_delete_template_removes_its_open_task():
         assert await tasks_repo.open_for_template(victim.id) is None
         remaining = await svc.get_plan(tid)
         assert len(remaining.templates) == 2
+
+    _run(body)
+
+
+def test_update_tree_phenology_month_lists():
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 2.0}
+        ))["tree_id"]
+        updated = await trees.update(tid, {
+            "expected_flowering_months": [3, 9],
+            "expected_harvest_months": [6, 12],
+            "expected_flowering_month": 3,
+            "expected_harvest_month": 6,
+        })
+        assert updated["expected_flowering_months"] == [3, 9]
+        assert updated["expected_harvest_months"] == [6, 12]
+        assert updated["expected_flowering_month"] == 3
+        plan = await svc.get_plan(tid)
+        assert plan.phenology.flowering_months == [3, 9]
+        assert plan.phenology.harvest_months == [6, 12]
 
     _run(body)
 

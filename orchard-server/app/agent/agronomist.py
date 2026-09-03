@@ -17,7 +17,9 @@ from typing import Literal, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from ..schemas.tree import _normalize_month_list
 
 from ..config import Settings
 from ..core.logging import get_logger
@@ -151,7 +153,8 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "ONE tree. Use the context blocks below (linked notes first, then general "
     "knowledge - same authority rules as always).\n\n"
     "Return 4 to 9 recurring maintenance tasks that keep this species/variety "
-    "healthy. For each task give:\n"
+    "healthy. Also infer the species' typical biological calendar: expected "
+    "flowering, harvest, and dormancy months (1-12). For each task give:\n"
     "- name: a short imperative label (e.g. 'Nitrogen feed', 'Structural prune').\n"
     "- category: EXACTLY one of "
     f"{', '.join(CATEGORIES)}. Pick 'other' only if nothing else fits.\n"
@@ -161,14 +164,26 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "- interval_days: how often it recurs (integer days; seasonal jobs -> ~90/"
     "180/365).\n"
     "- priority_score: 0-10, how important skipping it is (safety/disease high).\n"
+    "- valid_months: list of calendar months (1-12) when this task is appropriate "
+    "(e.g. fertilize Mar-May -> [3,4,5]). Empty list if year-round.\n"
+    "- biological_anchor: optional safety net anchor - 'flowering', 'harvest', or "
+    "'dormancy' when a hard cutoff applies (e.g. halt nitrogen before flowering).\n"
+    "- anchor_offset_days: integer days relative to the anchor month (negative = "
+    "must finish before the event, e.g. -30 means stop 30 days before flowering).\n"
     "- baseline_question: ALWAYS provide one - a short, task-specific question "
     "asking when THIS exact job was last done, so the first due date can be "
     "counted from there. Name the actual product / cut / operation you chose "
     "(e.g. 'When was copper fungicide last applied for anthracnose?', 'When was "
     "the last dormant-season structural prune?'). Never leave it blank.\n\n"
+    "At the plan level also set expected_flowering_months, expected_harvest_months, "
+    "and expected_dormancy_months (each a list of calendar months 1-12; a species "
+    "may flower more than once per year — include every typical month, or [] if "
+    "unknown). Also set the singular expected_flowering_month etc. to the first "
+    "month when known.\n\n"
     "Do NOT invent quantities, minutes, or product volumes - the system scales "
     "those from the tree's measured size. Do NOT include one-off establishment "
-    "tasks. Prefer the grower's linked notes for timing and product choices."
+    "tasks. Prefer the grower's linked notes for timing, nutrient restrictions, "
+    "and product choices."
 )
 
 
@@ -198,15 +213,40 @@ class _PlanItem(BaseModel):
     interval_days: int = Field(gt=0, le=730)
     priority_score: float = Field(ge=0, le=10, default=5.0)
     baseline_question: str | None = None
+    valid_months: list[int] = Field(default_factory=list)
+    biological_anchor: Literal["flowering", "harvest", "dormancy"] | None = None
+    anchor_offset_days: int | None = None
 
 
 class _CarePlanModel(BaseModel):
     items: list[_PlanItem] = Field(min_length=1, max_length=12)
+    expected_flowering_month: int | None = Field(default=None, ge=1, le=12)
+    expected_harvest_month: int | None = Field(default=None, ge=1, le=12)
+    expected_dormancy_month: int | None = Field(default=None, ge=1, le=12)
+    expected_flowering_months: list[int] = Field(default_factory=list)
+    expected_harvest_months: list[int] = Field(default_factory=list)
+    expected_dormancy_months: list[int] = Field(default_factory=list)
+
+    @field_validator(
+        "expected_flowering_months",
+        "expected_harvest_months",
+        "expected_dormancy_months",
+        mode="before",
+    )
+    @classmethod
+    def _validate_month_lists(cls, value: list[int] | None) -> list[int]:
+        return _normalize_month_list(value or [])
 
 
 class CarePlanDraft(TypedDict):
     templates: list[dict]      # ready-to-insert task_templates rows (no id/tree_id)
     source_ids: list[int]
+    flowering_month: int | None
+    harvest_month: int | None
+    dormancy_month: int | None
+    flowering_months: list[int]
+    harvest_months: list[int]
+    dormancy_months: list[int]
 
 
 @traced("agronomist.care_plan")
@@ -224,7 +264,8 @@ async def generate_care_plan(
     query = (
         f"routine annual care schedule for a {tree.get('variety', '')} "
         f"{tree.get('species', '')} tree: fertilizing, pruning, pest and "
-        f"disease management, mulching, irrigation"
+        f"disease management, mulching, irrigation, biological calendar, "
+        f"valid months, nutrient cutoff before flowering"
     )
     scope = await sources.allowed_source_ids(tree_id)
     groups = await sources.search(query, source_ids=scope or None)
@@ -280,12 +321,37 @@ async def generate_care_plan(
                 "required_resources": scaled.required_resources,
                 "resource_plan": [r.as_dict() for r in scaled.resource_plan],
                 "baseline_question": question,
+                "valid_months": item.valid_months,
+                "biological_anchor": item.biological_anchor,
+                "anchor_offset_days": item.anchor_offset_days,
                 "source_ids": source_ids,
             }
         )
 
+    flowering_months = plan.expected_flowering_months or (
+        [plan.expected_flowering_month] if plan.expected_flowering_month else []
+    )
+    harvest_months = plan.expected_harvest_months or (
+        [plan.expected_harvest_month] if plan.expected_harvest_month else []
+    )
+    dormancy_months = plan.expected_dormancy_months or (
+        [plan.expected_dormancy_month] if plan.expected_dormancy_month else []
+    )
+    flowering_months = _normalize_month_list(flowering_months)
+    harvest_months = _normalize_month_list(harvest_months)
+    dormancy_months = _normalize_month_list(dormancy_months)
+
     _log.info("agronomist.care_plan", tree_id=tree_id, count=len(templates))
-    return {"templates": templates, "source_ids": source_ids}
+    return {
+        "templates": templates,
+        "source_ids": source_ids,
+        "flowering_month": flowering_months[0] if flowering_months else plan.expected_flowering_month,
+        "harvest_month": harvest_months[0] if harvest_months else plan.expected_harvest_month,
+        "dormancy_month": dormancy_months[0] if dormancy_months else plan.expected_dormancy_month,
+        "flowering_months": flowering_months,
+        "harvest_months": harvest_months,
+        "dormancy_months": dormancy_months,
+    }
 
 
 def rescale_template(template: dict, tree: dict) -> dict:

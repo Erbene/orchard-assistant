@@ -125,8 +125,33 @@ function TaskRow({
   const due = task.scheduled_date
     ? new Date(task.scheduled_date).toLocaleDateString()
     : "unscheduled";
+  const outOfSeason =
+    task.out_of_season ||
+    (task.window_closes_on != null &&
+      (() => {
+        const closes = new Date(task.window_closes_on);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        closes.setHours(0, 0, 0, 0);
+        return closes.getTime() < today.getTime();
+      })());
   const overdue =
-    task.scheduled_date != null && new Date(task.scheduled_date) < new Date();
+    !outOfSeason &&
+    task.scheduled_date != null &&
+    new Date(task.scheduled_date) < new Date();
+  const windowClosing =
+    !outOfSeason &&
+    task.window_closes_on != null &&
+    (() => {
+      const closes = new Date(task.window_closes_on);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      closes.setHours(0, 0, 0, 0);
+      const days = Math.round(
+        (closes.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+      );
+      return days >= 0 && days < 14;
+    })();
 
   return (
     <li className="flex items-start gap-3 rounded-lg border p-3">
@@ -146,9 +171,26 @@ function TaskRow({
           {task.priority_score.toFixed(1)}
           {task.estimated_minutes ? ` · ~${task.estimated_minutes} min` : ""}
           {" · "}
-          <span className={overdue ? "font-medium text-destructive" : ""}>
-            {overdue ? "overdue" : `due ${due}`}
-          </span>
+          {outOfSeason ? (
+            <>
+              due {due}
+              {" · "}
+              <span className="text-muted-foreground">out of season</span>
+            </>
+          ) : (
+            <span className={overdue ? "font-medium text-destructive" : ""}>
+              {overdue ? "overdue" : `due ${due}`}
+            </span>
+          )}
+          {windowClosing && task.window_closes_on && (
+            <>
+              {" · "}
+              <span className="font-medium text-amber-600 dark:text-amber-400">
+                window closes{" "}
+                {new Date(task.window_closes_on).toLocaleDateString()}
+              </span>
+            </>
+          )}
         </p>
         {task.template_resource_plan.length > 0 && (
           <p className="mt-1 text-xs text-muted-foreground">

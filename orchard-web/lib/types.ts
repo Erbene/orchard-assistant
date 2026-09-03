@@ -57,6 +57,12 @@ export interface Tree {
   /** Whole-tree drip delivery (gal/hour) and the soil area the emitters wet (m2) - irrigation solver. */
   estimated_gph: number | null;
   wetted_area_m2: number | null;
+  expected_flowering_month: number | null;
+  expected_harvest_month: number | null;
+  expected_dormancy_month: number | null;
+  expected_flowering_months: number[];
+  expected_harvest_months: number[];
+  expected_dormancy_months: number[];
   /** True when the tree has at least one care-plan template (list endpoint only). */
   has_care_plan: boolean;
   age_days: number | null;
@@ -74,6 +80,12 @@ export interface TreeInput {
   canopy_spread_m?: number | null;
   estimated_gph?: number | null;
   wetted_area_m2?: number | null;
+  expected_flowering_month?: number | null;
+  expected_harvest_month?: number | null;
+  expected_dormancy_month?: number | null;
+  expected_flowering_months?: number[];
+  expected_harvest_months?: number[];
+  expected_dormancy_months?: number[];
 }
 
 export type TreePatch = Partial<TreeInput>;
@@ -134,6 +146,8 @@ export interface TaskRead {
   required_resources: string[];
   created_at: string;
   completed_at: string | null;
+  window_closes_on?: string | null;
+  out_of_season?: boolean;
 }
 
 // -- Care Plan engine ---------------------------------------------------
@@ -142,6 +156,8 @@ export type CareCategory =
   | "fertilize" | "mulch" | "prune" | "scout" | "spray"
   | "irrigation" | "weed" | "stake" | "soil_test" | "other";
 export type RateClass = "light" | "standard" | "heavy";
+
+export type BiologicalAnchor = "flowering" | "harvest" | "dormancy";
 
 export interface ResourceLine {
   name: string;
@@ -162,6 +178,9 @@ export interface TaskTemplate {
   resource_plan: ResourceLine[];
   baseline_question: string | null;
   anchor_date: string | null;
+  valid_months: number[];
+  biological_anchor: BiologicalAnchor | null;
+  anchor_offset_days: number | null;
   source_ids: number[];
   created_at: string;
   updated_at: string;
@@ -173,12 +192,22 @@ export interface BaselineQuestion {
   question: string;
 }
 
+export interface TreePhenology {
+  flowering_month: number | null;
+  harvest_month: number | null;
+  dormancy_month: number | null;
+  flowering_months: number[];
+  harvest_months: number[];
+  dormancy_months: number[];
+}
+
 export interface CarePlan {
   tree_id: number;
   templates: TaskTemplate[];
   baseline_questions: BaselineQuestion[];
   pending_task_count: number;
   generated: boolean;
+  phenology: TreePhenology;
 }
 
 export type TaskTemplatePatch = Partial<{
@@ -189,6 +218,9 @@ export type TaskTemplatePatch = Partial<{
   estimated_minutes: number;
   priority_score: number;
   required_resources: string[];
+  valid_months: number[];
+  biological_anchor: BiologicalAnchor | null;
+  anchor_offset_days: number | null;
 }>;
 
 export interface InboxTask extends TaskRead {
@@ -197,6 +229,7 @@ export interface InboxTask extends TaskRead {
   template_resource_plan: ResourceLine[];
   tree_species: string;
   tree_variety: string;
+  window_closes_on: string | null;
 }
 
 // -- Irrigation workflow (Phase 3) -------------------------------------

@@ -26,7 +26,7 @@ app/
   dependencies.py    FastAPI Depends() wiring: connection -> repo -> service
   mcp_server.py      FastMCP server: service logic as MCP tools + resource (SSE + stdio)
   rag/               chunking, file text extraction, ChromaDB wrapper
-  agent/             LangGraph agents: Orchestrator (chat router) + Foreman (scheduler)
+  agent/             LangGraph agents: Orchestrator, Foreman, Irrigation supervisor
 docker/postgres/init.sql   the schema (extensions + DDL), run on first container boot
 scripts/ensure_stack.py    `docker compose up --wait` the data-layer containers
 
@@ -130,8 +130,11 @@ time* by the Foreman, not stored.
 Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
 `category`, `rate_class`, `interval_days`, `estimated_minutes`, `priority_score`,
 `required_resources` list[str], `resource_plan` list[{name,quantity,unit}],
-`baseline_question?`, `anchor_date?`, `source_ids`). `tree` gained `height_m` /
-`canopy_spread_m`.
+`baseline_question?`, `anchor_date?`, `source_ids`, **`valid_months`**
+(list[int] 1–12; `[]` = unconstrained), **`biological_anchor`**
+(`flowering` | `harvest` | `dormancy`), **`anchor_offset_days`**). `tree` gained
+`height_m` / `canopy_spread_m` plus **`expected_flowering_month`** /
+`expected_harvest_month` / `expected_dormancy_month` (phenology for the solver).
 
 - **[app/agent/care_plan.py](app/agent/care_plan.py)** — the *deterministic*
   size-scaler. `canopy_volume_m3(height, spread)` (half-ellipsoid; spread ≈
@@ -140,14 +143,22 @@ Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
   does the arithmetic — see the eval decision log.
 - **`agronomist.generate_care_plan(tree, …)`** — `AGENT_MODEL` (7B) picks 4–9
   `_PlanItem`s (`name`, `category` enum, `rate_class`, `interval_days`,
+  `valid_months`, optional `biological_anchor` / `anchor_offset_days`,
   `priority_score`, optional `baseline_question`); Python scales each to a
   template row. Raises `LLMUnavailable` → **503** when Ollama is down.
+- **[app/agent/schedule_solver.py](app/agent/schedule_solver.py)** — pure
+  scheduling math (no DB, no LLM). `next_due` applies in-window cadence
+  (`interval_days`), `valid_months` preference clamping, and biological safety
+  nets (`biological_anchor` + `anchor_offset_days` + tree phenology months).
+  Safety-net violation → **skip** with reason; just-outside `valid_months` →
+  clamp into the next valid month.
 - **`CarePlanService`** — `generate` (replace templates, drop their *pending*
   tasks), `update_template` (re-scale on `category`/`rate_class` change, resync
   the one open task), `delete_template`, `apply_baseline` (answers → per-template
-  `anchor_date` → materialise the first task, `anchor + interval_days`).
+  `anchor_date` → materialise the first task via the solver).
 - **Recurrence = one open task per template.** `mark_complete`/`skip_task`
-  spawns the next (`prev.scheduled_date + interval_days`).
+  spawns the next via **`schedule_solver.next_due`**, not raw
+  `prev.scheduled_date + interval_days`.
 
 | Method | Path | Notes |
 | ------ | ---- | ----- |
@@ -159,8 +170,9 @@ Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
 | `POST` | `/api/v1/tasks/{id}/complete` · `/skip` · `/defer` | close out a task |
 
 `orchard-web`: `/trees/[id]` has a **Care Plan tab** ("Generate Care Plan" +
-auto-run on a new tree, editable templates, canopy dimensions) + a **baseline
-wizard** (dynamic date form); the `/trees` list has a per-row Care Plan button
+auto-run on a new tree, editable templates, canopy dimensions, **12-cell month
+strip**) + a **baseline wizard** (dynamic date form; can confirm flowering /
+harvest months); the `/trees` list has a per-row Care Plan button
 (`GET /trees` returns `has_care_plan`). `/schedule` is the **task inbox**;
 "Plan a work session" opens the Foreman JIT wizard in a dialog.
 
@@ -217,10 +229,12 @@ demos and on-demand runs.
   async psycopg can't run on Windows' Proactor loop):
 
   ```
-  START → deliberate ──(pass_no_action)────────────────────────────► END
-                     └──(skip / adjust / emergency)─► contention ─► summarize ─► execute_rachio_action ─► END
-                                                                                ▲ interrupt_before  (HITL)
+  START → deliberate → contention → summarize → execute_rachio_action → END
+                                                     ▲ interrupt_before  (HITL)
   ```
+
+  Every action (including `pass_no_action`) follows the full path — no
+  short-circuit to END.
 
   `deliberate` = `AGENT_MODEL` `.with_structured_output` picking one of four
   actions (`skip_schedule` / `pass_no_action` / **`adjust_duration`** /
@@ -241,9 +255,10 @@ demos and on-demand runs.
   vary ±3 min, pick the winner (ties → the shorter run). `tree.estimated_gph`
   is the **whole-tree** rate; `tree.wetted_area_m2` is grower-supplied.
 - **HITL**: the graph pauses at `interrupt_before=["execute_rachio_action"]`;
-  every deliberation is persisted as an `irrigation_proposal` row (the approval
-  queue). `pass_no_action` (baseline would run) is queued for grower approval;
-  only `skip_schedule` auto-executes when `auto_approve_skips` is on.
+  every deliberation — including `pass_no_action` when the baseline would run —
+  is persisted as an `irrigation_proposal` row (the approval queue). When
+  `auto_approve_skips` is on, `skip_schedule` proposals may auto-execute after
+  queuing; all other actions require explicit Approve.
 - **2-day spacing guard** (deterministic, post-LLM): before a proposal is saved,
   Rachio `lastWateredDate` is read for the zone. If the zone was watered today or
   yesterday, any watering action (`pass_no_action`, `adjust_duration`,
@@ -632,3 +647,13 @@ and compare. Named snapshots referenced here are kept in
      penalty constants need a sweep (no re-tune since `dripper_count` was
      dropped).
   Snapshot: `eval/baselines/2026-09-03-irrigation-7b.json`.
+- **2026-09-03 — Care Plan v2.** Biological calendar dates moved to pure Python
+  ([schedule_solver.py](app/agent/schedule_solver.py)); the LLM only extracts
+  `valid_months`, `biological_anchor`, and phenology months. Recurrence and
+  baseline materialisation both call the solver.
+- **2026-09-03 — full eval re-run** after Care Plan v2, irrigation HITL, 2-day
+  gap, and DEMO pins. **49/49 exact** (chat 25/25, schedule 12/12, irrigation
+  12/12 including `irr-12-two-day-gap`). Overlap with
+  `eval/baselines/2026-09-02-full-7b.json` still **36/36 exact**. Judge **29/38**
+  (~76%) — advisory noise; irrigation judge remains parked. Results in
+  gitignored `eval/results/` (not a new tracked baseline).

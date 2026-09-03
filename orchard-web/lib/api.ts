@@ -28,6 +28,7 @@ import type {
   Tree,
   TreeInput,
   TreePatch,
+  TreePhenology,
   ZoneDetail,
 } from "./types";
 
@@ -218,10 +219,19 @@ export const carePlanApi = {
   baseline: (
     treeId: number,
     answers: { template_id: number; last_done: string | null }[],
+    phenology?: Partial<TreePhenology>,
   ) =>
     apiClient.post<TaskRead[]>(
       `${API_PREFIX}/trees/${treeId}/care-plan/baseline`,
-      { answers },
+      {
+        answers,
+        flowering_month: phenology?.flowering_month ?? null,
+        harvest_month: phenology?.harvest_month ?? null,
+        dormancy_month: phenology?.dormancy_month ?? null,
+        flowering_months: phenology?.flowering_months ?? [],
+        harvest_months: phenology?.harvest_months ?? [],
+        dormancy_months: phenology?.dormancy_months ?? [],
+      },
     ),
   updateTemplate: (templateId: number, patch: TaskTemplatePatch) =>
     apiClient.patch<TaskTemplate>(

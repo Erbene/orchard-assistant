@@ -104,7 +104,12 @@ class TaskRepository:
         ``scheduled_before`` (a ``date``) keeps only tasks due on or before that
         day *plus* any unscheduled task (those always need placing).
         """
-        sql = "SELECT * FROM task WHERE status = 'pending'"
+        sql = (
+            "SELECT t.*, tt.valid_months AS template_valid_months"
+            " FROM task t"
+            " LEFT JOIN task_templates tt ON tt.id = t.template_id"
+            " WHERE t.status = 'pending'"
+        )
         params: dict[str, Any] = {}
         if scheduled_before is not None:
             sql += " AND (scheduled_date IS NULL OR scheduled_date::date <= :before)"
@@ -114,7 +119,15 @@ class TaskRepository:
             " scheduled_date IS NULL, scheduled_date ASC, id ASC"
         )
         result = await self._conn.execute(text(sql), params)
-        return [_decode(dict(r)) for r in result.mappings().all()]
+        rows: list[Row] = []
+        for r in result.mappings().all():
+            row = _decode(dict(r))
+            vm = row.get("template_valid_months")
+            row["template_valid_months"] = (
+                json.loads(vm) if isinstance(vm, str) else (vm or [])
+            )
+            rows.append(row)
+        return rows
 
     async def create(self, data: Row) -> Row:
         data = _encode(data)
@@ -175,6 +188,7 @@ class TaskRepository:
             text(
                 "SELECT t.*, tt.name AS template_name, tt.category AS template_category,"
                 " tt.resource_plan AS template_resource_plan,"
+                " tt.valid_months AS template_valid_months,"
                 " tr.species AS tree_species, tr.variety AS tree_variety"
                 " FROM task t"
                 " LEFT JOIN task_templates tt ON tt.id = t.template_id"
@@ -190,6 +204,10 @@ class TaskRepository:
             rp = row.get("template_resource_plan")
             row["template_resource_plan"] = (
                 json.loads(rp) if isinstance(rp, str) else (rp or [])
+            )
+            vm = row.get("template_valid_months")
+            row["template_valid_months"] = (
+                json.loads(vm) if isinstance(vm, str) else (vm or [])
             )
             rows.append(row)
         return rows

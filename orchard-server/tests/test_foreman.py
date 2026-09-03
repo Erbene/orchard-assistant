@@ -47,6 +47,60 @@ def test_task_age_days_never_negative():
     assert task_age_days(future) == 0
 
 
+def test_escalation_window_closing():
+    today = date.today()
+    closing = (today + timedelta(days=7)).isoformat()
+    tasks = [
+        {
+            **_task(1, "spring mulch", 5.0, 20),
+            "window_closes_on": closing,
+        },
+        _task(2, "copper fungicide spray", 4.0, 30, days_old=11),
+    ]
+    scored, escalations = escalate(tasks, today=today)
+    by_id = {t["id"]: t for t in scored}
+    assert by_id[1]["_effective_score"] == 10.0
+    assert by_id[2]["_effective_score"] == 12.0
+    mults = {e["task_id"]: e["multiplier"] for e in escalations}
+    assert mults[1] == 2.0
+    assert mults[2] == 3.0
+
+
+def test_escalation_window_closed_sinks_overdue():
+    today = date.today()
+    closed = (today - timedelta(days=1)).isoformat()
+    tasks = [
+        {
+            **_task(1, "Nitrogen feed", 8.0, 30, days_old=20),
+            "window_closes_on": closed,
+        },
+    ]
+    scored, escalations = escalate(tasks, today=today)
+    assert scored[0]["_effective_score"] == 2.0
+    assert len(escalations) == 1
+    esc = escalations[0]
+    assert esc["multiplier"] == 0.25
+    assert esc["days_late"] == 20
+    assert "out of season" in esc["reason"]
+    assert "window closed" in esc["reason"]
+
+
+def test_escalation_window_closed_not_overdue():
+    today = date.today()
+    closed = (today - timedelta(days=3)).isoformat()
+    future = (today + timedelta(days=5)).isoformat()
+    tasks = [
+        {
+            **_task(1, "spring mulch", 6.0, 20, days_old=0),
+            "scheduled_date": future,
+            "window_closes_on": closed,
+        },
+    ]
+    scored, escalations = escalate(tasks, today=today)
+    assert scored[0]["_effective_score"] == 1.5
+    assert escalations[0]["multiplier"] == 0.25
+
+
 # -- knapsack + refit ---------------------------------------------------
 
 def test_pack_respects_budget_and_prefers_value():
