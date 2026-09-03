@@ -37,7 +37,10 @@ _EVERGREEN_N: dict[int, str] = {
     8: "harvest", 9: "harvest", 10: "post_harvest", 11: "vegetative",
     12: "vegetative",
 }
-_EVERGREEN_KEYWORDS = ("mango", "citrus", "lemon", "lime", "orange", "avocado", "sapodilla", "guava")
+_EVERGREEN_KEYWORDS = (
+    "mango", "citrus", "lemon", "lime", "orange", "avocado", "sapodilla", "guava",
+    "jaboticaba", "jabuticaba", "lychee", "banana",
+)
 
 # Target soil moisture (VWC %) per stage - wetter through bloom / fruit set,
 # drier in dormancy and at harvest (mild stress firms fruit, cuts split).

@@ -157,4 +157,7 @@ irrigation: `action` (string or list), `status` (string or list), `hitl`
 (bool — proposal is a pending approval), `no_proposal` (bool),
 `duration_delta` (`negative`/`zero`/`positive` — the solver's run vs baseline),
 `recommended_minutes_min` / `recommended_minutes_max`, `deficit_score_sign`
-(`negative`/`positive`), `forecast_available` (bool).
+(`negative`/`zero`/`positive` — a deficit of exactly `0.0`, e.g. a tree with no
+moisture sensor, is its own `zero` bucket, not coerced into `positive`; a
+missing score is graded as an explicit failure, never silently treated as
+`0`), `forecast_available` (bool).

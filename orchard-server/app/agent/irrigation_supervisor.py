@@ -186,6 +186,7 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
                 canopy_spread_m=t.get("canopy_spread_m"),
                 estimated_gph=t.get("estimated_gph"),
                 wetted_area_m2=t.get("wetted_area_m2"),
+                target_vwc=t.get("target_vwc"),
             )
             for t in state.get("trees", [])
         ]
@@ -201,9 +202,8 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
             decision["duration_minutes"] = sol.recommended_minutes
             if sol.recommended_minutes <= 0:
                 decision["duration_minutes"] = 15
-        elif decision["action"] == "skip_schedule":
-            # the solver's number becomes the suggested length of the run AFTER the skip
-            decision["duration_minutes"] = sol.recommended_minutes
+        # skip_schedule stays a pure skip - it carries no run duration, even
+        # though the solver still computes one for the "thoughts" trace.
 
         return {"decision": decision, "solution": dataclasses.asdict(sol)}
 

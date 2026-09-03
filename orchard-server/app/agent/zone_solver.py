@@ -69,6 +69,8 @@ class TreeHydro:
     canopy_spread_m: float | None
     estimated_gph: float | None            # whole-tree drip delivery, gal/hour
     wetted_area_m2: float | None           # grower estimate of soil area the emitters wet
+    target_vwc: float | None = None        # phenology-derived target (app.irrigation.phenology);
+                                            # optional - no sensor / unknown species leaves it unset
 
     @property
     def _spread(self) -> float:
@@ -171,17 +173,38 @@ def simulate_post_vwc(
 
 _SOFT_MARGIN = 5.0   # VWC points before a hard threshold where the penalty starts rising
 
+# Weight for the phenology-target-tracking term in penalty(). Deliberately
+# small relative to the exponential wilt/saturation guards above - a gap of a
+# few VWC points past the soft margin already outscores anything this term can
+# produce, so the guards keep governing behaviour near the hard thresholds.
+# But inside the flat interior (both guards exactly 0, which is where the old
+# objective was blind) it is the *only* signal, so it has to be big enough to
+# separate candidates a coarse/fine grid step apart. 0.08 does that: two
+# candidates 10 minutes apart typically land several VWC points apart, which
+# clears the 0.01 resolution the winner rule rounds penalties to
+# (round(total_penalty, 2)); a species band's full width (5-20 VWC points)
+# only costs 0.4-1.6, well under a guard's climb over the same range. Tune
+# against the eval before nudging - this is a starting value, not a derived one.
+_TARGET_TRACKING_WEIGHT = 0.08
 
-def penalty(species: str, post_vwc: float) -> float:
-    """Exponential drought / saturation penalty. Near-zero while the tree sits
-    comfortably in its band; climbs steeply as it nears (and passes) the
-    species' wilt or saturation threshold."""
+
+def penalty(species: str, post_vwc: float, target_vwc: float | None = None) -> float:
+    """Exponential drought / saturation penalty, plus - when a phenology
+    ``target_vwc`` is known - a small linear pull toward it. Near-zero while
+    the tree sits comfortably in its band *and* close to target; climbs
+    steeply as it nears (and passes) the species' wilt or saturation
+    threshold, where the guard terms take back over regardless of target."""
     prof = profile_for(species)
     drought_gap = (prof.wilt_vwc + _SOFT_MARGIN) - post_vwc
     saturation_gap = post_vwc - (prof.sat_vwc - _SOFT_MARGIN)
     drought = math.exp(prof.k_wilt * max(0.0, drought_gap)) - 1.0
     saturation = math.exp(prof.k_sat * max(0.0, saturation_gap)) - 1.0
-    return round(drought + saturation, 3)
+    tracking = (
+        _TARGET_TRACKING_WEIGHT * abs(post_vwc - target_vwc)
+        if target_vwc is not None
+        else 0.0
+    )
+    return round(drought + saturation + tracking, 3)
 
 
 def evaluate(
@@ -202,7 +225,7 @@ def evaluate(
                 species=t.species,
                 delivered_gal=round(delivered_gallons(t, candidate.minutes), 1),
                 post_vwc=round(post, 1),
-                penalty=penalty(t.species, post),
+                penalty=penalty(t.species, post, t.target_vwc),
             )
         )
     return CandidateEval(candidate, round(sum(o.penalty for o in outcomes), 3), outcomes)

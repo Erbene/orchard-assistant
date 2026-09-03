@@ -120,8 +120,9 @@ def grade_irrigation(expect: dict[str, Any], result: dict[str, Any]) -> list[str
     ``expect`` keys: ``action`` (str | list), ``status`` (str | list),
     ``hitl`` (bool - proposal is a pending approval), ``no_proposal`` (bool),
     ``duration_delta`` ('negative'|'zero'|'positive'), ``recommended_minutes_max``,
-    ``recommended_minutes_min``, ``deficit_score_sign`` ('negative'|'positive'),
-    ``forecast_available`` (bool).
+    ``recommended_minutes_min``, ``deficit_score_sign``
+    ('negative'|'zero'|'positive' - a missing score is always a failure, never
+    coerced to a sign), ``forecast_available`` (bool).
     """
     fails: list[str] = []
     proposal = result.get("proposal")
@@ -177,9 +178,12 @@ def grade_irrigation(expect: dict[str, Any], result: dict[str, Any]) -> list[str
         score = proposal.get("deficit_score")
         if score is None:
             score = balance.get("deficit_score")
-        sign = "negative" if (score or 0) < 0 else "positive"
-        if sign != expect["deficit_score_sign"]:
-            fails.append(f"deficit_score {score} ({sign}), want {expect['deficit_score_sign']}")
+        if score is None:
+            fails.append(f"deficit_score is None, want {expect['deficit_score_sign']}")
+        else:
+            sign = "negative" if score < 0 else "positive" if score > 0 else "zero"
+            if sign != expect["deficit_score_sign"]:
+                fails.append(f"deficit_score {score} ({sign}), want {expect['deficit_score_sign']}")
 
     if "forecast_available" in expect:
         got = bool(balance.get("forecast_available"))
