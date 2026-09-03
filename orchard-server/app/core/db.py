@@ -146,6 +146,40 @@ _STARTUP_DDL: tuple[str, ...] = (
         " actuals_at TIMESTAMPTZ,"
         " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
     ),
+    # Irrigation Phase 3: wetted area, zone/supervisor config, HITL proposals
+    "ALTER TABLE tree ADD COLUMN IF NOT EXISTS wetted_area_m2 DOUBLE PRECISION",
+    "ALTER TABLE tree DROP COLUMN IF EXISTS dripper_count",
+    (
+        "CREATE TABLE IF NOT EXISTS irrigation_zone_config ("
+        " zone_id TEXT PRIMARY KEY,"
+        " baseline_minutes INTEGER NOT NULL DEFAULT 20,"
+        " baseline_frequency_days INTEGER NOT NULL DEFAULT 2,"
+        " supervised BOOLEAN NOT NULL DEFAULT true,"
+        " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ),
+    "ALTER TABLE irrigation_zone_config DROP COLUMN IF EXISTS dripper_default",
+    (
+        "CREATE TABLE IF NOT EXISTS irrigation_config ("
+        " id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),"
+        " supervisor_frequency_hours INTEGER NOT NULL DEFAULT 24,"
+        " auto_approve_skips BOOLEAN NOT NULL DEFAULT false,"
+        " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ),
+    "INSERT INTO irrigation_config (id) VALUES (1) ON CONFLICT DO NOTHING",
+    (
+        "CREATE TABLE IF NOT EXISTS irrigation_proposal ("
+        " thread_id TEXT PRIMARY KEY,"
+        " zone_id TEXT NOT NULL,"
+        " for_date DATE NOT NULL,"
+        " status TEXT NOT NULL DEFAULT 'pending',"
+        " action TEXT NOT NULL,"
+        " summary TEXT NOT NULL DEFAULT '',"
+        " payload JSONB NOT NULL DEFAULT '{}'::jsonb,"
+        " result JSONB,"
+        " created_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
+        " resolved_at TIMESTAMPTZ)"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_irrigation_proposal_status ON irrigation_proposal (status, created_at DESC)",
 )
 
 

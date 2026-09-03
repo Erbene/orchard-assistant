@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   Bot,
   CalendarClock,
+  Droplets,
   Library,
   Trees,
   MapPin,
@@ -21,6 +22,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 const NAV = [
   { href: "/assistant", label: "Assistant", icon: Bot },
   { href: "/schedule", label: "Schedule", icon: CalendarClock },
+  { href: "/irrigation", label: "Irrigation", icon: Droplets },
   { href: "/trees", label: "Trees", icon: Trees },
   { href: "/zones", label: "Zones", icon: MapPin },
   { href: "/sources", label: "Sources", icon: Library },

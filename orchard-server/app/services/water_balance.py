@@ -83,6 +83,8 @@ class WaterBalanceService:
             for_date=on_date,
             tree_id=tree_id,
             zone_id=tree.get("zone_id"),
+            species=tree.get("species", ""),
+            variety=tree.get("variety", ""),
             growth_stage=stage,
             target_vwc=target,
             current_vwc=current,

@@ -10,6 +10,11 @@ import type {
   ApiErrorBody,
   CarePlan,
   InboxTask,
+  IrrigationOverview,
+  SupervisorConfig,
+  SupervisorProposal,
+  SupervisorRunResult,
+  ZoneConfig,
   RachioDevice,
   ReportResult,
   ScheduleState,
@@ -223,6 +228,41 @@ export const carePlanApi = {
     ),
   deleteTemplate: (templateId: number) =>
     apiClient.del(`${API_PREFIX}/care-plan/templates/${templateId}`),
+};
+
+/** Irrigation supervisor (Phase 3): schedule config + the HITL approval queue. */
+export const irrigationApi = {
+  overview: () =>
+    apiClient.get<IrrigationOverview>(`${API_PREFIX}/irrigation/overview`),
+  updateSupervisor: (patch: Partial<SupervisorConfig>) =>
+    apiClient.put<SupervisorConfig>(
+      `${API_PREFIX}/irrigation/config/supervisor`,
+      patch,
+    ),
+  updateZone: (
+    zoneId: string,
+    patch: Partial<Omit<ZoneConfig, "zone_id" | "tree_count">>,
+  ) =>
+    apiClient.put<ZoneConfig>(
+      `${API_PREFIX}/irrigation/config/zones/${encodeURIComponent(zoneId)}`,
+      patch,
+    ),
+  runSupervisor: (zoneIds?: string[]) =>
+    apiClient.post<SupervisorRunResult>(`${API_PREFIX}/irrigation/supervisor/run`, {
+      zone_ids: zoneIds ?? null,
+    }),
+  proposals: (status?: string) =>
+    apiClient.get<SupervisorProposal[]>(`${API_PREFIX}/irrigation/proposals`, {
+      query: { status },
+    }),
+  approve: (threadId: string) =>
+    apiClient.post<SupervisorProposal>(
+      `${API_PREFIX}/irrigation/proposals/${encodeURIComponent(threadId)}/approve`,
+    ),
+  reject: (threadId: string) =>
+    apiClient.post<SupervisorProposal>(
+      `${API_PREFIX}/irrigation/proposals/${encodeURIComponent(threadId)}/reject`,
+    ),
 };
 
 /** The schedule inbox: generated tasks, and closing them out. */

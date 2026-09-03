@@ -54,6 +54,9 @@ export interface Tree {
   /** Canopy dimensions (metres) - drive Care Plan resource/time scaling. */
   height_m: number | null;
   canopy_spread_m: number | null;
+  /** Whole-tree drip delivery (gal/hour) and the soil area the emitters wet (m2) - irrigation solver. */
+  estimated_gph: number | null;
+  wetted_area_m2: number | null;
   /** True when the tree has at least one care-plan template (list endpoint only). */
   has_care_plan: boolean;
   age_days: number | null;
@@ -69,6 +72,8 @@ export interface TreeInput {
   notes?: string | null;
   height_m?: number | null;
   canopy_spread_m?: number | null;
+  estimated_gph?: number | null;
+  wetted_area_m2?: number | null;
 }
 
 export type TreePatch = Partial<TreeInput>;
@@ -192,6 +197,89 @@ export interface InboxTask extends TaskRead {
   template_resource_plan: ResourceLine[];
   tree_species: string;
   tree_variety: string;
+}
+
+// -- Irrigation workflow (Phase 3) -------------------------------------
+
+export interface ZoneConfig {
+  zone_id: string;
+  baseline_minutes: number;
+  baseline_frequency_days: number;
+  supervised: boolean;
+  tree_count: number;
+}
+
+export interface SupervisorConfig {
+  supervisor_frequency_hours: number;
+  auto_approve_skips: boolean;
+}
+
+export interface IrrigationOverview {
+  supervisor: SupervisorConfig;
+  zones: ZoneConfig[];
+  pending_proposals: number;
+}
+
+export type IrrigationActionType =
+  | "skip_schedule"
+  | "pass_no_action"
+  | "adjust_duration"
+  | "start_zone_watering";
+
+export interface SupervisorDecision {
+  action: IrrigationActionType;
+  days: number;
+  duration_minutes: number;
+  reason: string;
+}
+
+export interface SolverTreeOutcome {
+  tree_id: number;
+  species: string;
+  delivered_gal: number;
+  post_vwc: number;
+  penalty: number;
+}
+
+export interface ZoneSolution {
+  recommended_minutes: number;
+  pulses: number;
+  baseline_minutes: number;
+  delta_minutes: number;
+  total_penalty: number;
+  per_tree: SolverTreeOutcome[];
+  candidates_considered: number;
+  rationale: string;
+  thoughts: { candidate: string; penalty: number }[];
+}
+
+export type ProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "executed"
+  | "no_action"
+  | "error";
+
+export interface SupervisorProposal {
+  thread_id: string;
+  zone_id: string;
+  for_date: string;
+  status: ProposalStatus;
+  action: IrrigationActionType;
+  summary: string;
+  decision: SupervisorDecision | null;
+  solution: ZoneSolution | null;
+  deficit_score: number | null;
+  result: Record<string, unknown> | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface SupervisorRunResult {
+  ran_at: string;
+  for_date: string;
+  proposals: SupervisorProposal[];
 }
 
 export type SourceType = "file" | "text";

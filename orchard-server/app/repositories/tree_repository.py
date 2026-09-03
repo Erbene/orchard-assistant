@@ -19,6 +19,7 @@ _COLUMNS = (
     "height_m",
     "canopy_spread_m",
     "estimated_gph",
+    "wetted_area_m2",
 )
 _MUTABLE = tuple(c for c in _COLUMNS if c != "tree_id")
 
@@ -66,6 +67,15 @@ class TreeRepository:
             )
         )
         return [r[0] for r in result.all()]
+
+    async def zone_tree_counts(self) -> dict[str, int]:
+        result = await self._conn.execute(
+            text(
+                "SELECT zone_id, count(*) AS n FROM tree"
+                " WHERE zone_id IS NOT NULL AND zone_id <> '' GROUP BY zone_id"
+            )
+        )
+        return {r["zone_id"]: r["n"] for r in result.mappings().all()}
 
     async def create(self, data: Row) -> Row:
         # Insert every mutable column, plus tree_id when the caller supplied one.

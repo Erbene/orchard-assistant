@@ -36,6 +36,8 @@ const EMPTY: TreeInput = {
   notes: null,
   height_m: null,
   canopy_spread_m: null,
+  estimated_gph: null,
+  wetted_area_m2: null,
 };
 
 function fromTree(tree: Tree): TreeInput {
@@ -48,6 +50,8 @@ function fromTree(tree: Tree): TreeInput {
     notes: tree.notes,
     height_m: tree.height_m,
     canopy_spread_m: tree.canopy_spread_m,
+    estimated_gph: tree.estimated_gph,
+    wetted_area_m2: tree.wetted_area_m2,
   };
 }
 
@@ -102,6 +106,8 @@ export function TreeEntityForm({
       notes: values.notes?.trim() || null,
       height_m: values.height_m ?? null,
       canopy_spread_m: values.canopy_spread_m ?? null,
+      estimated_gph: values.estimated_gph ?? null,
+      wetted_area_m2: values.wetted_area_m2 ?? null,
     };
 
     setSubmitting(true);
@@ -241,6 +247,44 @@ export function TreeEntityForm({
                 e.target.value ? Number(e.target.value) : null,
               )
             }
+          />
+        </Field>
+
+        <Field
+          label="Drip delivery (gal/hour)"
+          hint="Whole-tree emitter output — drives the irrigation solver"
+          error={errors.estimated_gph}
+          htmlFor="tree-gph"
+        >
+          <Input
+            id="tree-gph"
+            type="number"
+            step="0.5"
+            min="0"
+            value={values.estimated_gph ?? ""}
+            onChange={(e) =>
+              set("estimated_gph", e.target.value ? Number(e.target.value) : null)
+            }
+            placeholder="e.g. 8"
+          />
+        </Field>
+
+        <Field
+          label="Wetted area (m²)"
+          hint="Soil area the emitters actually wet; blank ≈ 30% of canopy"
+          error={errors.wetted_area_m2}
+          htmlFor="tree-wetted"
+        >
+          <Input
+            id="tree-wetted"
+            type="number"
+            step="0.1"
+            min="0"
+            value={values.wetted_area_m2 ?? ""}
+            onChange={(e) =>
+              set("wetted_area_m2", e.target.value ? Number(e.target.value) : null)
+            }
+            placeholder="e.g. 1.5"
           />
         </Field>
       </div>

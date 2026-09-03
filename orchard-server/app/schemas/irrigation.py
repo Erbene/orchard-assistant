@@ -149,6 +149,8 @@ class WaterBalance(BaseModel):
     for_date: date
     tree_id: int
     zone_id: str | None = None
+    species: str = ""
+    variety: str = ""
     growth_stage: str
     target_vwc: float
     current_vwc: float | None = None
@@ -171,18 +173,93 @@ class ZoneWaterBalance(BaseModel):
 
 
 class SupervisorDecision(BaseModel):
-    action: str                            # IrrigationAction
-    days: int = 0                          # for skip_schedule
-    duration_minutes: int = 0             # for start_zone_watering
+    action: str                            # skip_schedule | pass_no_action | adjust_duration | start_zone_watering
+    days: int = 0                          # skip_schedule / adjust_duration
+    duration_minutes: int = 0             # adjust_duration / start_zone_watering (solver-sized)
     reason: str = ""
 
 
-class SupervisorRun(BaseModel):
+class TreeOutcome(BaseModel):
+    tree_id: int
+    species: str
+    delivered_gal: float
+    post_vwc: float
+    penalty: float
+
+
+class ZoneSolutionOut(BaseModel):
+    recommended_minutes: int
+    pulses: int = 1
+    baseline_minutes: int
+    delta_minutes: int
+    total_penalty: float
+    per_tree: list[TreeOutcome] = Field(default_factory=list)
+    candidates_considered: int = 0
+    rationale: str = ""
+    thoughts: list[dict] = Field(default_factory=list)
+
+
+ProposalStatus = str  # pending | approved | rejected | executed | no_action | error
+
+
+class SupervisorProposal(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    thread_id: str
+    zone_id: str
+    for_date: date
+    status: str
+    action: str
+    summary: str = ""
+    decision: SupervisorDecision | None = None
+    solution: ZoneSolutionOut | None = None
+    deficit_score: float | None = None
+    result: dict | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
+
+
+# -- schedule / supervisor config --------------------------------
+
+class ZoneConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    zone_id: str
+    baseline_minutes: int = 20
+    baseline_frequency_days: int = 2
+    supervised: bool = True
+    tree_count: int = 0                     # filled by the overview endpoint
+
+
+class ZoneConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    baseline_minutes: int | None = Field(default=None, ge=0, le=180)
+    baseline_frequency_days: int | None = Field(default=None, gt=0, le=30)
+    supervised: bool | None = None
+
+
+class SupervisorConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    supervisor_frequency_hours: int = 24
+    auto_approve_skips: bool = False
+
+
+class SupervisorConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supervisor_frequency_hours: int | None = Field(default=None, gt=0, le=168)
+    auto_approve_skips: bool | None = None
+
+
+class IrrigationOverview(BaseModel):
+    supervisor: SupervisorConfig
+    zones: list[ZoneConfig] = Field(default_factory=list)
+    pending_proposals: int = 0
+
+
+class SupervisorRunResult(BaseModel):
     ran_at: datetime
     for_date: date
-    zone_id: str
-    deficit_score: float
-    growth_stages: list[str] = Field(default_factory=list)
-    decision: SupervisorDecision
-    executed: dict = Field(default_factory=dict)   # ToolResult
-    llm_available: bool = True
+    proposals: list[SupervisorProposal] = Field(default_factory=list)

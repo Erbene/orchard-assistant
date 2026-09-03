@@ -166,11 +166,13 @@ wizard** (dynamic date form); the `/trees` list has a per-row Care Plan button
 
 ### Irrigation workflow — Phase 1 ([app/irrigation/](app/irrigation/))
 
-The water-saving deliberation engine. **Services only — no HTTP routes yet**
-(the CRON triggers land in Phase 3). Phase 1 = data plumbing; Phase 2 = the
-Supervisor that intercepts the baseline Rachio schedule.
+The water-saving deliberation engine that intercepts the baseline Rachio
+schedule. Phase 1 = data plumbing; Phase 2 = the Supervisor node; Phase 3 =
+the zone-contention solver + HITL approval + the `/irrigation` UI. An external
+CRON still has to fire `POST /api/v1/irrigation/supervisor/run` on a cadence.
 
-- `tree` gained `estimated_gph` (total drip delivery, gal/hour).
+- `tree` gained `estimated_gph` (whole-tree drip delivery, gal/hour) and
+  `wetted_area_m2` (grower estimate of the soil area the emitters wet).
 - **`moisture_sensor`** (`id` PK, `label`, nullable `tree_id` FK + `zone_id`) —
   a probe maps to a tree, a Rachio zone, or both. `MoistureSensorService.tree_moisture(tree_id)`
   resolves a tree's effective VWC: its own sensors' mean, else its zone's, else `none`.
@@ -203,13 +205,54 @@ Supervisor that intercepts the baseline Rachio schedule.
   `pass_no_action(zone)`, `start_zone_watering(zone, minutes)`. Also registered
   on the MCP server.
 - **[app/agent/irrigation_supervisor.py](app/agent/irrigation_supervisor.py)** —
-  a LangGraph node (`START → deliberate → execute → END`, async, no checkpointer).
-  `deliberate` = `AGENT_MODEL` `.with_structured_output` picking one action from
-  the deficit score + per-tree stages (prompt = "agronomic safety net, objective
-  SAVE WATER; the baseline controller is blind to soil moisture"); `execute`
-  dispatches the tool. LLM down → `pass_no_action` (defer to baseline — a CRON
-  job must not crash). `IrrigationSupervisorService.run_daily()` is the CRON
-  entrypoint (Phase 3 wires the trigger); `run_for_zone(zone)` for one zone.
+  the LangGraph, now **synchronous + Postgres-checkpointed** (Foreman pattern —
+  async psycopg can't run on Windows' Proactor loop):
+
+  ```
+  START → deliberate ──(pass_no_action)────────────────────────────► END
+                     └──(skip / adjust / emergency)─► contention ─► summarize ─► execute_rachio_action ─► END
+                                                                                ▲ interrupt_before  (HITL)
+  ```
+
+  `deliberate` = `AGENT_MODEL` `.with_structured_output` picking one of four
+  actions (`skip_schedule` / `pass_no_action` / **`adjust_duration`** /
+  `start_zone_watering`); `contention` runs the ToT solver and rewrites the run
+  duration; `summarize` = a second LLM call for the grower-facing **Plan
+  Summary** ("30 mm rain forecast and soil at 28% VWC — proposing a 2-day skip
+  and trimming the next run to 15 min"). LLM down → `pass_no_action`.
+
+**Phase 3 — Zone Contention Solver + HITL + UI**
+
+- **[app/agent/zone_solver.py](app/agent/zone_solver.py)** — pure, sync
+  Tree-of-Thoughts + beam search for a heterogeneous zone (Mango's low
+  over-water tolerance vs. Jaboticaba's high demand). Candidate durations
+  `{10,20,30,40,50}` + pulsed runs → simulate post-irrigation VWC per species
+  (`Volume = (D/60)·estimated_gph`, then mm over the tree's `wetted_area_m2` —
+  or ~30% of the canopy footprint when it's blank) → **exponential** drought /
+  saturation penalties (per-species bands in `_PROFILES`) → keep top `k=2`,
+  vary ±3 min, pick the winner (ties → the shorter run). `tree.estimated_gph`
+  is the **whole-tree** rate; `tree.wetted_area_m2` is grower-supplied.
+- **HITL**: the graph pauses at `interrupt_before=["execute_rachio_action"]`;
+  every deliberation is persisted as an `irrigation_proposal` row (the approval
+  queue). `pass_no_action` auto-records; `skip_schedule` auto-executes when
+  `auto_approve_skips` is on.
+- **[app/tools/irrigation.py](app/tools/irrigation.py)** gains
+  `rachio_set_run_duration(zone, minutes, days)`.
+- **`irrigation_zone_config`** (per-zone baseline minutes / days / supervised)
+  + **`irrigation_config`** (singleton: supervisor frequency, auto-approve).
+
+| Method | Path | |
+| ------ | ---- | --- |
+| `GET`  | `/api/v1/irrigation/overview` | schedule + supervisor config + queue size |
+| `PUT`  | `/api/v1/irrigation/config/supervisor` · `/config/zones/{id}` | edit config |
+| `POST` | `/api/v1/irrigation/supervisor/run` | run the deliberation now (CRON hits this) |
+| `GET`  | `/api/v1/irrigation/proposals?status=pending` | the HITL queue |
+| `POST` | `/api/v1/irrigation/proposals/{thread_id}/approve` · `/reject` | resume / abort the graph |
+
+`orchard-web` `/irrigation` — a top-level route: the **approval queue** (action,
+duration change, Plan Summary, per-species projected VWC, Approve / Reject) +
+**Schedule & settings** (per-zone baseline, supervisor cadence, auto-approve) +
+a **"Run Supervision Task"** button.
 
 **Schema:** all DDL is in [docker/postgres/init.sql](docker/postgres/init.sql),
 applied once when the `postgres` container's volume is first created (and by

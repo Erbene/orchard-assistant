@@ -21,21 +21,26 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from .config import Settings, get_settings
 from .core import db
 from .rag.vector_store import OrchardVectorStore, get_vector_store
-from .agent.irrigation_supervisor import IrrigationSupervisorService
 from .irrigation.forecast_log import RainfallForecastService
 from .irrigation.sensors import MoistureSensorService
 from .repositories.conversation_repository import ConversationRepository
+from .repositories.irrigation_config_repository import IrrigationConfigRepository
+from .repositories.irrigation_proposal_repository import IrrigationProposalRepository
 from .repositories.moisture_sensor_repository import MoistureSensorRepository
 from .repositories.rainfall_forecast_repository import RainfallForecastRepository
 from .repositories.source_repository import SourceRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.task_template_repository import TaskTemplateRepository
 from .repositories.tree_repository import TreeRepository
-from .agent.checkpointer import ensure_foreman_graph
+from .agent.checkpointer import ensure_foreman_graph, ensure_irrigation_graph
 from .services.chat_service import ChatService
 from .services.foreman_service import ForemanService
 from .services.care_plan_service import CarePlanService
 from .services.conversation_service import ConversationService
+from .services.irrigation_service import (
+    IrrigationConfigService,
+    IrrigationSupervisorService,
+)
 from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.water_balance import WaterBalanceService
@@ -189,12 +194,35 @@ def get_water_balance_service(
     return WaterBalanceService(sensors, trees, settings)
 
 
-def get_irrigation_supervisor_service(
+def get_irrigation_config_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> IrrigationConfigRepository:
+    return IrrigationConfigRepository(conn)
+
+
+def get_irrigation_proposal_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> IrrigationProposalRepository:
+    return IrrigationProposalRepository(conn)
+
+
+def get_irrigation_config_service(
+    config: IrrigationConfigRepository = Depends(get_irrigation_config_repository),
+    trees: TreeRepository = Depends(get_tree_repository),
+    proposals: IrrigationProposalRepository = Depends(get_irrigation_proposal_repository),
+) -> IrrigationConfigService:
+    return IrrigationConfigService(config, trees, proposals)
+
+
+async def get_irrigation_supervisor_service(
     water: WaterBalanceService = Depends(get_water_balance_service),
     trees: TreeRepository = Depends(get_tree_repository),
+    config: IrrigationConfigRepository = Depends(get_irrigation_config_repository),
+    proposals: IrrigationProposalRepository = Depends(get_irrigation_proposal_repository),
     settings: Settings = Depends(get_settings_dep),
 ) -> IrrigationSupervisorService:
-    return IrrigationSupervisorService(water, trees, settings)
+    graph = await ensure_irrigation_graph(settings)
+    return IrrigationSupervisorService(water, trees, config, proposals, graph, settings)
 
 
 def get_chat_service(

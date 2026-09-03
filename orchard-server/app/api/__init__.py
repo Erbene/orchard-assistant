@@ -4,6 +4,7 @@ from .routes import (
     care_plan,
     chat,
     conversations,
+    irrigation,
     schedule,
     sources,
     tasks,
@@ -20,5 +21,6 @@ api_router.include_router(chat.router)
 api_router.include_router(conversations.router)
 api_router.include_router(care_plan.router)
 api_router.include_router(tasks.router)
+api_router.include_router(irrigation.router)
 
 __all__ = ["api_router"]

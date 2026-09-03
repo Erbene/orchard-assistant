@@ -39,12 +39,15 @@ CREATE TABLE IF NOT EXISTS tree (
     notes               TEXT,
     height_m            NUMERIC(4,2),              -- canopy scaling for the Care Plan engine
     canopy_spread_m     NUMERIC(4,2),              -- optional; defaults to 0.6 * height
-    estimated_gph       DOUBLE PRECISION           -- total drip delivery to this tree, gallons/hour
+    estimated_gph       DOUBLE PRECISION,          -- whole-tree drip delivery, gallons/hour
+    wetted_area_m2      DOUBLE PRECISION           -- grower estimate of soil area the emitters wet
 );
 -- idempotent for volumes created before the Care Plan / Irrigation engines
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS height_m NUMERIC(4,2);
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS canopy_spread_m NUMERIC(4,2);
-ALTER TABLE tree ADD COLUMN IF NOT EXISTS estimated_gph DOUBLE PRECISION;
+ALTER TABLE tree ADD COLUMN IF NOT EXISTS estimated_gph DOUBLE PRECISION;    -- whole-tree gph
+ALTER TABLE tree ADD COLUMN IF NOT EXISTS wetted_area_m2 DOUBLE PRECISION;   -- drip wetted area (Phase 3)
+ALTER TABLE tree DROP COLUMN IF EXISTS dripper_count;                        -- removed: gph is whole-tree now
 CREATE INDEX IF NOT EXISTS idx_tree_zone ON tree (zone_id);
 
 -- A routine care task for one tree. The Agronomist picks the task + a
@@ -196,6 +199,45 @@ CREATE TABLE IF NOT EXISTS rainfall_forecast_log (
     actuals_at       TIMESTAMPTZ,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Phase 3: the baseline schedule a grower sets per zone (the "intended
+-- baseline" - the stubbed tools log what they would push to Rachio).
+CREATE TABLE IF NOT EXISTS irrigation_zone_config (
+    zone_id                  TEXT PRIMARY KEY,
+    baseline_minutes         INTEGER NOT NULL DEFAULT 20 CHECK (baseline_minutes >= 0),
+    baseline_frequency_days  INTEGER NOT NULL DEFAULT 2 CHECK (baseline_frequency_days > 0),
+    supervised               BOOLEAN NOT NULL DEFAULT true,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE irrigation_zone_config DROP COLUMN IF EXISTS dripper_default;
+
+-- Singleton supervisor config.
+CREATE TABLE IF NOT EXISTS irrigation_config (
+    id                          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    supervisor_frequency_hours  INTEGER NOT NULL DEFAULT 24 CHECK (supervisor_frequency_hours > 0),
+    auto_approve_skips          BOOLEAN NOT NULL DEFAULT false,
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO irrigation_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- One row per supervisor deliberation (keyed by the LangGraph thread_id). The
+-- graph pauses at `interrupt_before=["execute_rachio_action"]`; this row is the
+-- HITL approval queue the UI reads.
+CREATE TABLE IF NOT EXISTS irrigation_proposal (
+    thread_id    TEXT PRIMARY KEY,
+    zone_id      TEXT NOT NULL,
+    for_date     DATE NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'rejected', 'executed', 'no_action', 'error')),
+    action       TEXT NOT NULL,
+    summary      TEXT NOT NULL DEFAULT '',
+    payload      JSONB NOT NULL DEFAULT '{}'::jsonb,   -- decision + solution + water_balance
+    result       JSONB,                                -- ToolResult, set on approval
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_irrigation_proposal_status
+    ON irrigation_proposal (status, created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Planner-visible stats

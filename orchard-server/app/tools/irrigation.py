@@ -18,7 +18,9 @@ from ..core.logging import get_logger
 
 _log = get_logger("app.tools.irrigation")
 
-IrrigationAction = Literal["skip_schedule", "pass_no_action", "start_zone_watering"]
+IrrigationAction = Literal[
+    "skip_schedule", "pass_no_action", "start_zone_watering", "adjust_duration"
+]
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,33 @@ def pass_no_action(zone_id: str) -> ToolResult:
     return ToolResult("pass_no_action", zone_id, {}, at=_now())
 
 
+def rachio_set_run_duration(
+    zone_id: str, duration_minutes: int, *, days: int = 0
+) -> ToolResult:
+    """Change ``zone_id``'s next scheduled run to ``duration_minutes`` (and,
+    optionally, skip ``days`` first). The supervisor's time-adjustment action -
+    the solver sizes the duration. Phase 3: logged, not executed."""
+    duration_minutes = max(0, min(int(duration_minutes), 180))
+    days = max(0, min(int(days), 14))
+    _log.info(
+        "irrigation.tool.set_run_duration",
+        zone_id=zone_id,
+        duration_minutes=duration_minutes,
+        days=days,
+        dry_run=True,
+    )
+    print(
+        f"[IRRIGATION STUB] rachio_set_run_duration(zone_id={zone_id!r}, "
+        f"duration_minutes={duration_minutes}, days={days})"
+    )
+    return ToolResult(
+        "adjust_duration",
+        zone_id,
+        {"duration_minutes": duration_minutes, "days": days},
+        at=_now(),
+    )
+
+
 def start_zone_watering(zone_id: str, duration_minutes: int) -> ToolResult:
     """Force an immediate emergency run of ``zone_id`` for ``duration_minutes`` -
     only when a moisture-critical stage would be harmed by waiting for the
@@ -83,9 +112,11 @@ def start_zone_watering(zone_id: str, duration_minutes: int) -> ToolResult:
 def dispatch(
     action: str, zone_id: str, *, days: int = 0, duration_minutes: int = 0
 ) -> ToolResult:
-    """Run the tool named by an LLM decision."""
+    """Run the tool named by an LLM / solver decision."""
     if action == "skip_schedule":
         return rachio_skip_schedule(zone_id, days)
+    if action == "adjust_duration":
+        return rachio_set_run_duration(zone_id, duration_minutes, days=days)
     if action == "start_zone_watering":
         return start_zone_watering(zone_id, duration_minutes)
     return pass_no_action(zone_id)
@@ -96,6 +127,7 @@ __all__ = [
     "ToolResult",
     "rachio_skip_schedule",
     "pass_no_action",
+    "rachio_set_run_duration",
     "start_zone_watering",
     "dispatch",
 ]
