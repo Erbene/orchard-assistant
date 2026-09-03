@@ -8,6 +8,7 @@ import { ApiError, irrigationApi } from "@/lib/api";
 import type { IrrigationOverview, SupervisorProposal } from "@/lib/types";
 import { ProposalCard } from "@/components/irrigation/proposal-card";
 import { ScheduleConfig } from "@/components/irrigation/schedule-config";
+import { DemoScenarios } from "@/components/irrigation/demo-scenarios";
 
 export default function IrrigationPage() {
   const toast = useToast();
@@ -93,6 +94,8 @@ export default function IrrigationPage() {
           </TabButton>
         </div>
       </div>
+
+      {overview?.demo_enabled && <DemoScenarios onApplied={load} />}
 
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl">

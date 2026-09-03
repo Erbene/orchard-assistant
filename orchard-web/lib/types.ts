@@ -204,7 +204,6 @@ export interface InboxTask extends TaskRead {
 export interface ZoneConfig {
   zone_id: string;
   baseline_minutes: number;
-  baseline_frequency_days: number;
   supervised: boolean;
   tree_count: number;
 }
@@ -218,6 +217,7 @@ export interface IrrigationOverview {
   supervisor: SupervisorConfig;
   zones: ZoneConfig[];
   pending_proposals: number;
+  demo_enabled?: boolean;
 }
 
 export type IrrigationActionType =
@@ -225,6 +225,29 @@ export type IrrigationActionType =
   | "pass_no_action"
   | "adjust_duration"
   | "start_zone_watering";
+
+export interface DemoScenario {
+  id: string;
+  title: string;
+  expected_action: IrrigationActionType;
+  summary: string;
+  detail: string;
+}
+
+export interface DemoCatalog {
+  enabled: boolean;
+  active_scenario_id: string | null;
+  scenarios: DemoScenario[];
+}
+
+export interface DemoApplyResult {
+  scenario_id: string;
+  expected_action: IrrigationActionType;
+  on_date: string;
+  zone_ids: string[];
+  trees_pinned: number;
+  message: string;
+}
 
 export interface SupervisorDecision {
   action: IrrigationActionType;

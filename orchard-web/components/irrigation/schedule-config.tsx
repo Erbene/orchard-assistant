@@ -67,8 +67,13 @@ export function ScheduleConfig({
           </label>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          The supervisor still needs an external scheduler to fire on this
-          cadence; use the button above to run it now.
+          The supervisor ticks in-process on this cadence while the API is up (no
+          external cron). <strong>Run Supervision Task</strong> still runs
+          immediately. Per-zone watering interval is not configured here — it is
+          inferred from Rachio last watering; a 2-day gap is enforced in code.
+          Watering proposals (pass, duration change, emergency) need grower
+          approval; schedule skips can auto-approve when the checkbox above is
+          on.
         </p>
       </section>
 
@@ -95,11 +100,8 @@ export function ScheduleConfig({
 function ZoneRow({ zone, onSaved }: { zone: ZoneConfig; onSaved: () => void }) {
   const toast = useToast();
   const [minutes, setMinutes] = React.useState(String(zone.baseline_minutes));
-  const [days, setDays] = React.useState(String(zone.baseline_frequency_days));
   const [saving, setSaving] = React.useState(false);
-  const dirty =
-    minutes !== String(zone.baseline_minutes) ||
-    days !== String(zone.baseline_frequency_days);
+  const dirty = minutes !== String(zone.baseline_minutes);
 
   async function save(patch: Parameters<typeof irrigationApi.updateZone>[1]) {
     setSaving(true);
@@ -135,17 +137,6 @@ function ZoneRow({ zone, onSaved }: { zone: ZoneConfig; onSaved: () => void }) {
           className="h-8 w-24"
         />
       </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Every (days)</Label>
-        <Input
-          type="number"
-          min={1}
-          max={30}
-          value={days}
-          onChange={(e) => setDays(e.target.value)}
-          className="h-8 w-24"
-        />
-      </div>
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -161,7 +152,6 @@ function ZoneRow({ zone, onSaved }: { zone: ZoneConfig; onSaved: () => void }) {
           onClick={() =>
             void save({
               baseline_minutes: Number(minutes),
-              baseline_frequency_days: Number(days),
             })
           }
         >

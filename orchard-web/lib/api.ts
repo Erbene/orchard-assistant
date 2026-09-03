@@ -9,6 +9,8 @@ import type { Conversation, ConversationDetail } from "./chat/types";
 import type {
   ApiErrorBody,
   CarePlan,
+  DemoApplyResult,
+  DemoCatalog,
   InboxTask,
   IrrigationOverview,
   SupervisorConfig,
@@ -262,6 +264,12 @@ export const irrigationApi = {
   reject: (threadId: string) =>
     apiClient.post<SupervisorProposal>(
       `${API_PREFIX}/irrigation/proposals/${encodeURIComponent(threadId)}/reject`,
+    ),
+  demoCatalog: () =>
+    apiClient.get<DemoCatalog>(`${API_PREFIX}/irrigation/demo`),
+  applyDemo: (id: string) =>
+    apiClient.post<DemoApplyResult>(
+      `${API_PREFIX}/irrigation/demo/${encodeURIComponent(id)}/apply`,
     ),
 };
 
