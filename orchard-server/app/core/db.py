@@ -123,6 +123,29 @@ _STARTUP_DDL: tuple[str, ...] = (
     # widen the task status enum: + 'skipped'
     "ALTER TABLE task DROP CONSTRAINT IF EXISTS task_status_check",
     "ALTER TABLE task ADD CONSTRAINT task_status_check CHECK (status IN ('pending', 'completed', 'deferred', 'skipped'))",
+    # Irrigation workflow (Phase 1)
+    "ALTER TABLE tree ADD COLUMN IF NOT EXISTS estimated_gph DOUBLE PRECISION",
+    (
+        "CREATE TABLE IF NOT EXISTS moisture_sensor ("
+        " id TEXT PRIMARY KEY,"
+        " label TEXT,"
+        " tree_id BIGINT REFERENCES tree(tree_id) ON DELETE SET NULL,"
+        " zone_id TEXT,"
+        " created_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_moisture_sensor_tree ON moisture_sensor (tree_id)",
+    "CREATE INDEX IF NOT EXISTS idx_moisture_sensor_zone ON moisture_sensor (zone_id)",
+    (
+        "CREATE TABLE IF NOT EXISTS rainfall_forecast_log ("
+        " for_date DATE PRIMARY KEY,"
+        " forecast_1d_mm DOUBLE PRECISION, forecast_3d_mm DOUBLE PRECISION,"
+        " forecast_5d_mm DOUBLE PRECISION,"
+        " forecast_1d_at TIMESTAMPTZ, forecast_3d_at TIMESTAMPTZ,"
+        " forecast_5d_at TIMESTAMPTZ,"
+        " actual_nws_mm DOUBLE PRECISION, actual_gauge_mm DOUBLE PRECISION,"
+        " actuals_at TIMESTAMPTZ,"
+        " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ),
 )
 
 

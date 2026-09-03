@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 _HEIGHT = Field(default=None, gt=0, le=99, description="Canopy height in metres (Care Plan scaling).")
 _SPREAD = Field(default=None, gt=0, le=99, description="Canopy spread in metres; defaults to 0.6 * height.")
+_GPH = Field(default=None, ge=0, le=1000, description="Total drip delivery to this tree, gallons/hour (irrigation).")
 
 
 class TreeCreate(BaseModel):
@@ -26,6 +27,7 @@ class TreeCreate(BaseModel):
     notes: str | None = None
     height_m: float | None = _HEIGHT
     canopy_spread_m: float | None = _SPREAD
+    estimated_gph: float | None = _GPH
     tree_id: int | None = Field(default=None, gt=0, description="Optional; assigned by the store when omitted.")
 
 
@@ -42,6 +44,7 @@ class TreeUpdate(BaseModel):
     notes: str | None = None
     height_m: float | None = _HEIGHT
     canopy_spread_m: float | None = _SPREAD
+    estimated_gph: float | None = _GPH
 
 
 class TreeRead(BaseModel):
@@ -56,6 +59,7 @@ class TreeRead(BaseModel):
     notes: str | None = None
     height_m: float | None = None
     canopy_spread_m: float | None = None
+    estimated_gph: float | None = None
     has_care_plan: bool = False   # only the list endpoint sets this
     age_days: int | None = None
     age_years: float | None = None

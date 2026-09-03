@@ -18,6 +18,7 @@ _COLUMNS = (
     "notes",
     "height_m",
     "canopy_spread_m",
+    "estimated_gph",
 )
 _MUTABLE = tuple(c for c in _COLUMNS if c != "tree_id")
 
@@ -55,6 +56,16 @@ class TreeRepository:
         )
         row = result.mappings().first()
         return dict(row) if row is not None else None
+
+    async def distinct_zone_ids(self) -> list[str]:
+        """Non-null zone ids that have at least one tree (irrigation supervisor)."""
+        result = await self._conn.execute(
+            text(
+                "SELECT DISTINCT zone_id FROM tree"
+                " WHERE zone_id IS NOT NULL AND zone_id <> '' ORDER BY zone_id"
+            )
+        )
+        return [r[0] for r in result.all()]
 
     async def create(self, data: Row) -> Row:
         # Insert every mutable column, plus tree_id when the caller supplied one.

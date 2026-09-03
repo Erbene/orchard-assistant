@@ -54,6 +54,7 @@ class TreeService:
             "notes": payload.notes,
             "height_m": payload.height_m,
             "canopy_spread_m": payload.canopy_spread_m,
+            "estimated_gph": payload.estimated_gph,
         }
         try:
             row = await self._trees.create(record)

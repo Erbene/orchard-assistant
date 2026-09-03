@@ -38,11 +38,13 @@ CREATE TABLE IF NOT EXISTS tree (
     additional_context  TEXT,
     notes               TEXT,
     height_m            NUMERIC(4,2),              -- canopy scaling for the Care Plan engine
-    canopy_spread_m     NUMERIC(4,2)               -- optional; defaults to 0.6 * height
+    canopy_spread_m     NUMERIC(4,2),              -- optional; defaults to 0.6 * height
+    estimated_gph       DOUBLE PRECISION           -- total drip delivery to this tree, gallons/hour
 );
--- idempotent for volumes created before the Care Plan engine
+-- idempotent for volumes created before the Care Plan / Irrigation engines
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS height_m NUMERIC(4,2);
 ALTER TABLE tree ADD COLUMN IF NOT EXISTS canopy_spread_m NUMERIC(4,2);
+ALTER TABLE tree ADD COLUMN IF NOT EXISTS estimated_gph DOUBLE PRECISION;
 CREATE INDEX IF NOT EXISTS idx_tree_zone ON tree (zone_id);
 
 -- A routine care task for one tree. The Agronomist picks the task + a
@@ -160,6 +162,40 @@ CREATE TABLE IF NOT EXISTS chat_message (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_message_conversation
     ON chat_message (conversation_id, id);
+
+-- ---------------------------------------------------------------------------
+-- Irrigation workflow (app/irrigation/) - Phase 1: sensor map + forecast log
+-- ---------------------------------------------------------------------------
+-- A physical moisture probe. May be tied to a specific tree, a Rachio zone, or
+-- both (a zone probe that also sits at a representative tree). A tree's
+-- effective reading = its own sensors, else its zone's sensors.
+CREATE TABLE IF NOT EXISTS moisture_sensor (
+    id          TEXT PRIMARY KEY,                 -- physical sensor id / UUID
+    label       TEXT,
+    tree_id     BIGINT REFERENCES tree(tree_id) ON DELETE SET NULL,
+    zone_id     TEXT,                             -- Rachio zone id (unvalidated)
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_moisture_sensor_tree ON moisture_sensor (tree_id);
+CREATE INDEX IF NOT EXISTS idx_moisture_sensor_zone ON moisture_sensor (zone_id);
+
+-- One row per calendar day. Forecast columns are captured N days ahead (the
+-- "roll" writes forecast_{1,3,5}d_mm for today+{1,3,5}); the actual columns are
+-- backfilled the day after (observed NWS precip + the rain-bucket reading).
+-- Lets us measure forecast error per horizon over time.
+CREATE TABLE IF NOT EXISTS rainfall_forecast_log (
+    for_date         DATE PRIMARY KEY,
+    forecast_1d_mm   DOUBLE PRECISION,
+    forecast_3d_mm   DOUBLE PRECISION,
+    forecast_5d_mm   DOUBLE PRECISION,
+    forecast_1d_at   TIMESTAMPTZ,
+    forecast_3d_at   TIMESTAMPTZ,
+    forecast_5d_at   TIMESTAMPTZ,
+    actual_nws_mm    DOUBLE PRECISION,            -- observed (nearest NWS station)
+    actual_gauge_mm  DOUBLE PRECISION,            -- observed (rain-bucket hardware)
+    actuals_at       TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- ---------------------------------------------------------------------------
 -- Planner-visible stats

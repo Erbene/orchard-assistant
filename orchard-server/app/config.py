@@ -68,6 +68,13 @@ def _bool(name: str, *, default: bool) -> bool:
     return default if raw is None else raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _float_or_none(raw: str | None) -> float | None:
+    try:
+        return float(raw) if raw not in (None, "") else None
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     # Uploaded source files (not Postgres/Chroma data - plain disk storage).
@@ -149,6 +156,33 @@ class Settings:
         default_factory=lambda: os.environ.get(
             "RACHIO_BASE_URL", "https://api.rach.io/1/public"
         )
+    )
+
+    # Irrigation workflow (app/irrigation/). Orchard location -> NWS gridpoint
+    # forecast + nearest-station observations. lat/lon unset -> forecast calls
+    # return {"available": false} (non-fatal).
+    orchard_lat: float | None = field(
+        default_factory=lambda: _float_or_none(os.environ.get("ORCHARD_LAT"))
+    )
+    orchard_lon: float | None = field(
+        default_factory=lambda: _float_or_none(os.environ.get("ORCHARD_LON"))
+    )
+    nws_base_url: str = field(
+        default_factory=lambda: os.environ.get("NWS_BASE_URL", "https://api.weather.gov")
+    )
+    # NWS REQUIRES a User-Agent identifying the app + a contact. Set it in .env.
+    nws_user_agent: str = field(
+        default_factory=lambda: os.environ.get(
+            "NWS_USER_AGENT", "orchard-assistant (set NWS_USER_AGENT to app + contact email)"
+        )
+    )
+    # Phase 2 supervisor: fallback target soil moisture (VWC %) when a
+    # growth-stage target isn't available; hemisphere for the phenology month map.
+    irrigation_target_vwc: float = field(
+        default_factory=lambda: float(os.environ.get("IRRIGATION_TARGET_VWC", "25.0"))
+    )
+    hemisphere: str = field(
+        default_factory=lambda: os.environ.get("ORCHARD_HEMISPHERE", "N").upper()[:1]
     )
 
     # ChromaDB HTTP server (docker-compose "chromadb" service - app/core/vector_db.py)
