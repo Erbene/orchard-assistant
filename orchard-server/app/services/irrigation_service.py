@@ -15,6 +15,7 @@ from typing import Any
 from ..config import Settings
 from ..core.logging import get_logger
 from ..core.tracing import traced
+from ..irrigation import demo
 from ..irrigation.spacing import (
     WATERING_ACTIONS,
     consecutive_water_blocked,
@@ -41,7 +42,6 @@ from .water_balance import WaterBalanceService
 _log = get_logger("app.irrigation")
 
 _DEFAULT_BASELINE_MIN = 20
-_DEFAULT_FREQ_DAYS = 2
 
 
 def _now() -> datetime:
@@ -104,7 +104,6 @@ class IrrigationConfigService:
         return ZoneConfig(
             zone_id=zone_id,
             baseline_minutes=row.get("baseline_minutes", _DEFAULT_BASELINE_MIN),
-            baseline_frequency_days=row.get("baseline_frequency_days", _DEFAULT_FREQ_DAYS),
             supervised=row.get("supervised", True),
             tree_count=tree_count,
         )
@@ -133,16 +132,27 @@ class IrrigationSupervisorService:
     def _cfg(thread_id: str) -> dict:
         return {"configurable": {"thread_id": thread_id}}
 
+    def _invoke_cfg(self, thread_id: str) -> dict:
+        cfg: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        sid = demo.active_scenario_id()
+        if sid:
+            cfg["run_name"] = f"irrigation-demo:{sid}"
+            cfg["tags"] = ["irrigation", "demo", sid]
+            cfg["metadata"] = {"demo_scenario": sid}
+        return cfg
+
     # -- run ---------------------------------------------------
 
     @traced("irrigation.supervisor_run")
     async def run(
         self, *, zone_ids: list[str] | None = None, on_date: date | None = None
     ) -> SupervisorRunResult:
-        on_date = on_date or date.today()
+        on_date = on_date or demo.overlay_on_date() or date.today()
         sup_cfg = await self._config.get_supervisor()
         zone_cfgs = await self._config.all_zones()
-        zones = zone_ids or await self._trees.distinct_zone_ids()
+        if zone_ids is None:
+            zone_ids = demo.overlay_zone_ids() or await self._trees.distinct_zone_ids()
+        zones = zone_ids
 
         out: list[SupervisorProposal] = []
         for zone_id in zones:
@@ -153,12 +163,14 @@ class IrrigationSupervisorService:
             state = await self._build_state(zone_id, zc, on_date)
             thread_id = f"irr-{zone_id}-{on_date.isoformat()}"
 
-            await asyncio.to_thread(self._graph.invoke, state, self._cfg(thread_id))
+            await asyncio.to_thread(self._graph.invoke, state, self._invoke_cfg(thread_id))
             snap = await asyncio.to_thread(self._graph.get_state, self._cfg(thread_id))
 
             proposal = self._proposal_row(thread_id, zone_id, on_date, snap)
 
-            last_watered = await self._fetch_last_watered_date(zone_id)
+            last_watered = demo.overlay_last_watered(zone_id)
+            if last_watered is None:
+                last_watered = await self._fetch_last_watered_date(zone_id)
             self._apply_spacing_guard(proposal, on_date, last_watered)
 
             if proposal["action"] == "skip_schedule" and sup_cfg["auto_approve_skips"]:

@@ -23,6 +23,7 @@ from pathlib import Path
 # always mocked / never really configured. Set BEFORE app.config imports.
 os.environ["ORCHARD_SKIP_DOTENV"] = "1"
 os.environ["ORCHARD_SUPERVISOR_LOOP"] = "0"
+os.environ["ORCHARD_DEMO"] = "0"
 os.environ["RACHIO_API_KEY"] = ""
 os.environ["LANGCHAIN_TRACING_V2"] = "false"   # no LangSmith calls in CI
 os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:1"  # unreachable -> template fallback

@@ -226,7 +226,6 @@ class ZoneConfig(BaseModel):
 
     zone_id: str
     baseline_minutes: int = 20
-    baseline_frequency_days: int = 2
     supervised: bool = True
     tree_count: int = 0                     # filled by the overview endpoint
 
@@ -235,7 +234,6 @@ class ZoneConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     baseline_minutes: int | None = Field(default=None, ge=0, le=180)
-    baseline_frequency_days: int | None = Field(default=None, gt=0, le=30)
     supervised: bool | None = None
 
 
@@ -257,6 +255,30 @@ class IrrigationOverview(BaseModel):
     supervisor: SupervisorConfig
     zones: list[ZoneConfig] = Field(default_factory=list)
     pending_proposals: int = 0
+    demo_enabled: bool = False
+
+
+class DemoScenario(BaseModel):
+    id: str
+    title: str
+    expected_action: str
+    summary: str
+    detail: str
+
+
+class DemoCatalog(BaseModel):
+    enabled: bool
+    active_scenario_id: str | None = None
+    scenarios: list[DemoScenario] = Field(default_factory=list)
+
+
+class DemoApplyResult(BaseModel):
+    scenario_id: str
+    expected_action: str
+    on_date: date
+    zone_ids: list[str]
+    trees_pinned: int
+    message: str
 
 
 class SupervisorRunResult(BaseModel):

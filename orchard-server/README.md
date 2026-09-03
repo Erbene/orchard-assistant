@@ -252,7 +252,8 @@ demos and on-demand runs.
   Dry-run Approve in tests does not advance Rachio's timestamp.
 - **[app/tools/irrigation.py](app/tools/irrigation.py)** gains
   `rachio_set_run_duration(zone, minutes, days)`.
-- **`irrigation_zone_config`** (per-zone baseline minutes / days / supervised)
+- **`irrigation_zone_config`** (per-zone baseline minutes + supervised; watering
+  gap from Rachio `lastWateredDate`, not a local days field)
   + **`irrigation_config`** (singleton: supervisor frequency, auto-approve).
 
 | Method | Path | |
@@ -262,6 +263,14 @@ demos and on-demand runs.
 | `POST` | `/api/v1/irrigation/supervisor/run` | run the deliberation now (same path as the in-process loop) |
 | `GET`  | `/api/v1/irrigation/proposals?status=pending` | the HITL queue |
 | `POST` | `/api/v1/irrigation/proposals/{thread_id}/approve` · `/reject` | resume / abort the graph |
+| `GET`  | `/api/v1/irrigation/demo` | demo scenario catalog (`ORCHARD_DEMO=true`) |
+| `POST` | `/api/v1/irrigation/demo/{id}/apply` | pin stub readings for a scenario |
+
+**Demo mode (`ORCHARD_DEMO=true`, default off):** `/irrigation` shows three preset
+supervisor scenarios (rain skip, mixed-zone ToT, drought emergency). Apply pins
+stub moisture / forecast / last-watered; the grower then clicks **Run Supervision
+Task** so LangSmith records `irrigation.tot_solver` and `irrigation-demo:{id}`.
+Set `LANGCHAIN_TRACING_V2=true` and a `LANGCHAIN_API_KEY` to view traces.
 
 `orchard-web` `/irrigation` — a top-level route: the **approval queue** (action,
 duration change, Plan Summary, per-species projected VWC, Approve / Reject) +

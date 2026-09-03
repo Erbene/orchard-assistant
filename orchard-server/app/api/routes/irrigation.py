@@ -6,17 +6,27 @@
     POST /irrigation/supervisor/run                 -> run the deliberation flow now
     GET  /irrigation/proposals?status=pending       -> the HITL approval queue
     POST /irrigation/proposals/{thread_id}/approve  -> resume the graph past the interrupt
-    POST /irrigation/proposals/{thread_id}/reject   -> abort
+    GET  /irrigation/demo                           -> demo catalog (ORCHARD_DEMO)
+    POST /irrigation/demo/{id}/apply                -> pin stub readings for a scenario
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from ...config import Settings
 from ...dependencies import (
     get_irrigation_config_service,
     get_irrigation_supervisor_service,
+    get_moisture_sensor_service,
+    get_settings_dep,
+    get_tree_repository,
 )
+from ...irrigation import demo
+from ...irrigation.sensors import MoistureSensorService
+from ...repositories.tree_repository import TreeRepository
 from ...schemas.irrigation import (
+    DemoApplyResult,
+    DemoCatalog,
     IrrigationOverview,
     SupervisorConfig,
     SupervisorConfigUpdate,
@@ -25,6 +35,7 @@ from ...schemas.irrigation import (
     ZoneConfig,
     ZoneConfigUpdate,
 )
+from ...services.exceptions import NotFoundError
 from ...services.irrigation_service import (
     IrrigationConfigService,
     IrrigationSupervisorService,
@@ -39,8 +50,12 @@ class _RunRequest(BaseModel):
 
 
 @router.get("/overview", response_model=IrrigationOverview)
-async def overview(svc: IrrigationConfigService = Depends(get_irrigation_config_service)):
-    return await svc.overview()
+async def overview(
+    svc: IrrigationConfigService = Depends(get_irrigation_config_service),
+    settings: Settings = Depends(get_settings_dep),
+):
+    ov = await svc.overview()
+    return ov.model_copy(update={"demo_enabled": settings.orchard_demo})
 
 
 @router.put("/config/supervisor", response_model=SupervisorConfig)
@@ -90,3 +105,29 @@ async def reject_proposal(
     svc: IrrigationSupervisorService = Depends(get_irrigation_supervisor_service),
 ):
     return await svc.reject(thread_id)
+
+
+def _require_demo(settings: Settings) -> None:
+    if not settings.orchard_demo:
+        raise NotFoundError("demo mode is off (set ORCHARD_DEMO=true)")
+
+
+@router.get("/demo", response_model=DemoCatalog)
+async def demo_catalog(settings: Settings = Depends(get_settings_dep)):
+    _require_demo(settings)
+    return DemoCatalog(
+        enabled=True,
+        active_scenario_id=demo.active_scenario_id(),
+        scenarios=demo.catalog(),
+    )
+
+
+@router.post("/demo/{scenario_id}/apply", response_model=DemoApplyResult)
+async def apply_demo_scenario(
+    scenario_id: str,
+    settings: Settings = Depends(get_settings_dep),
+    trees: TreeRepository = Depends(get_tree_repository),
+    sensors: MoistureSensorService = Depends(get_moisture_sensor_service),
+):
+    _require_demo(settings)
+    return await demo.apply_to_orchard(scenario_id, trees, sensors)

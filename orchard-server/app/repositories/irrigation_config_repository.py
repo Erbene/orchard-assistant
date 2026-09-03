@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 Row = dict[str, Any]
 
-_ZONE_FIELDS = ("baseline_minutes", "baseline_frequency_days", "supervised")
+_ZONE_FIELDS = ("baseline_minutes", "supervised")
 _SUPERVISOR_FIELDS = ("supervisor_frequency_hours", "auto_approve_skips")
 
 

@@ -160,7 +160,7 @@ Irrigation row:
 `sources` (`name` + `text`, ingested into the KB).
 
 Irrigation `seed` keys: `zone` (`zone_id` + optional `baseline_minutes` /
-`baseline_frequency_days` / `supervised`), `on_date` (`YYYY-MM-DD`, drives the
+`supervised`), `on_date` (`YYYY-MM-DD`, drives the
 growth-stage lookup and the forecast date), `trees` (each may carry `zone_id`,
 `canopy_spread_m`, `estimated_gph`, `wetted_area_m2`, and `current_vwc` — which
 pins a stub moisture sensor for that tree), `forecast` (`{"qpf_mm": N}` or

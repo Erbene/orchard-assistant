@@ -205,7 +205,6 @@ CREATE TABLE IF NOT EXISTS rainfall_forecast_log (
 CREATE TABLE IF NOT EXISTS irrigation_zone_config (
     zone_id                  TEXT PRIMARY KEY,
     baseline_minutes         INTEGER NOT NULL DEFAULT 20 CHECK (baseline_minutes >= 0),
-    baseline_frequency_days  INTEGER NOT NULL DEFAULT 2 CHECK (baseline_frequency_days > 0),
     supervised               BOOLEAN NOT NULL DEFAULT true,
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );

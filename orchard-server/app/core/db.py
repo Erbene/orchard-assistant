@@ -153,11 +153,11 @@ _STARTUP_DDL: tuple[str, ...] = (
         "CREATE TABLE IF NOT EXISTS irrigation_zone_config ("
         " zone_id TEXT PRIMARY KEY,"
         " baseline_minutes INTEGER NOT NULL DEFAULT 20,"
-        " baseline_frequency_days INTEGER NOT NULL DEFAULT 2,"
         " supervised BOOLEAN NOT NULL DEFAULT true,"
         " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
     ),
     "ALTER TABLE irrigation_zone_config DROP COLUMN IF EXISTS dripper_default",
+    "ALTER TABLE irrigation_zone_config DROP COLUMN IF EXISTS baseline_frequency_days",
     (
         "CREATE TABLE IF NOT EXISTS irrigation_config ("
         " id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),"

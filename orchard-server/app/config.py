@@ -184,6 +184,10 @@ class Settings:
     hemisphere: str = field(
         default_factory=lambda: os.environ.get("ORCHARD_HEMISPHERE", "N").upper()[:1]
     )
+    # Demo UI + reading overrides for the irrigation supervisor (off in tests).
+    orchard_demo: bool = field(
+        default_factory=lambda: _bool("ORCHARD_DEMO", default=False)
+    )
 
     # ChromaDB HTTP server (docker-compose "chromadb" service - app/core/vector_db.py)
     chroma_host: str = field(

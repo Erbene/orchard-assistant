@@ -18,6 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from ..core.tracing import traced
+
 GAL_TO_L: float = 3.78541
 _ROOT_DEPTH_M = 0.30            # effective root-zone depth for VWC bookkeeping
 _MIN_WETTED_AREA_M2 = 0.5
@@ -290,6 +292,7 @@ _BEAM_K = 2
 _FINE_DELTAS = (-3, 0, 3)
 
 
+@traced("irrigation.tot_solver")
 def solve(
     trees: list[TreeHydro],
     *,

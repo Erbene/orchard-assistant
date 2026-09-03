@@ -238,7 +238,7 @@ async def seed(settings: Settings, spec: dict[str, Any]) -> dict[str, int]:
                 zone["zone_id"],
                 {
                     k: zone[k]
-                    for k in ("baseline_minutes", "baseline_frequency_days", "supervised")
+                    for k in ("baseline_minutes", "supervised")
                     if k in zone
                 },
             )
