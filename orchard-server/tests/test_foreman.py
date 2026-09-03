@@ -9,6 +9,7 @@ from langgraph.types import Command
 
 from app.agent.escalation import escalate, task_age_days
 from app.agent.foreman import build_foreman_graph, pack, refit, resources_for
+from app.agent.schedule_rules import Completion, apply_blocks
 
 
 def _task(tid, action, score, minutes, resources=(), *, days_old=0):
@@ -129,6 +130,57 @@ def test_refit_drops_blocked_tasks_and_backfills():
     assert [t["id"] for t in dropped] == [2]
     assert dropped[0]["_drop_reason"] == "needs Copper"
     assert {t["id"] for t in final} == {1, 3, 4}          # prune kept, freed time -> mulch + inspect
+
+
+def test_refit_excludes_blocked_ids_from_backfill():
+    prune = {**_task(1, "prune", 9.0, 40, ["Shears"]), "_effective_score": 9.0}
+    spray = {**_task(2, "spray", 8.0, 30, ["Copper"]), "_effective_score": 8.0}
+    mulch = {**_task(3, "mulch", 2.0, 20), "_effective_score": 2.0}
+    proposed = [spray]
+    final, dropped = refit(
+        [prune, spray, mulch], proposed, [], minutes=90, blocked_ids={1}
+    )
+    assert 1 not in {t["id"] for t in final}
+    assert {t["id"] for t in final} == {2, 3}
+    assert dropped == []
+
+
+def test_apply_blocks_drops_cross_task_blocked():
+    today = date.today()
+    completions = [
+        Completion(
+            tree_id=1,
+            category="spray",
+            completed_on=today - timedelta(days=2),
+            blocks=[{"category": "prune", "min_gap_days": 7}],
+        )
+    ]
+    tasks = [
+        {**_task(1, "prune sprouts", 8.0, 45, ["Pruning Shears"]), "template_category": "prune"},
+        {**_task(2, "mulch ring", 3.0, 20), "template_category": "mulch"},
+    ]
+    eligible, blocked = apply_blocks(tasks, completions, today=today)
+    g = _graph()
+    cfg = {"configurable": {"thread_id": "t-blocks"}}
+    r = g.invoke(
+        {
+            "pending_tasks": tasks,
+            "recent_completions": [
+                {
+                    "tree_id": 1,
+                    "category": "spray",
+                    "completed_on": (today - timedelta(days=2)).isoformat(),
+                    "blocks": [{"category": "prune", "min_gap_days": 7}],
+                }
+            ],
+            "available_minutes": 120,
+        },
+        cfg,
+    )
+    assert {t["id"] for t in eligible} == {2}
+    assert blocked[0]["id"] == 1
+    assert 1 in {t["id"] for t in r["dropped_tasks"]}
+    assert {t["id"] for t in r["proposed_tasks"]} == {2}
 
 
 # -- graph flow (MemorySaver) -----------------------------------------

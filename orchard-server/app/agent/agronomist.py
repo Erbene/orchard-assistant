@@ -174,7 +174,12 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "asking when THIS exact job was last done, so the first due date can be "
     "counted from there. Name the actual product / cut / operation you chose "
     "(e.g. 'When was copper fungicide last applied for anthracnose?', 'When was "
-    "the last dormant-season structural prune?'). Never leave it blank.\n\n"
+    "the last dormant-season structural prune?'). Never leave it blank.\n"
+    "- blocks: after THIS job is done, which other categories must wait before "
+    "they can run on the same tree. List of {category, min_gap_days} using ONLY "
+    "closed categories from the list above (e.g. spray blocks prune for 7 days; "
+    "fertilize may block nothing -> []). Do not invent PHI prose - only "
+    "category + integer days. Empty list if none.\n\n"
     "At the plan level also set expected_flowering_months, expected_harvest_months, "
     "and expected_dormancy_months (each a list of calendar months 1-12; a species "
     "may flower more than once per year — include every typical month, or [] if "
@@ -203,6 +208,14 @@ _BASELINE_QUESTION: dict[str, str] = {
 }
 
 
+class _BlockRule(BaseModel):
+    category: Literal[
+        "fertilize", "mulch", "prune", "scout", "spray",
+        "irrigation", "weed", "stake", "soil_test", "other",
+    ]
+    min_gap_days: int = Field(ge=1, le=365)
+
+
 class _PlanItem(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     category: Literal[
@@ -216,6 +229,7 @@ class _PlanItem(BaseModel):
     valid_months: list[int] = Field(default_factory=list)
     biological_anchor: Literal["flowering", "harvest", "dormancy"] | None = None
     anchor_offset_days: int | None = None
+    blocks: list[_BlockRule] = Field(default_factory=list, max_length=8)
 
 
 class _CarePlanModel(BaseModel):
@@ -324,6 +338,7 @@ async def generate_care_plan(
                 "valid_months": item.valid_months,
                 "biological_anchor": item.biological_anchor,
                 "anchor_offset_days": item.anchor_offset_days,
+                "blocks": [b.model_dump() for b in item.blocks],
                 "source_ids": source_ids,
             }
         )

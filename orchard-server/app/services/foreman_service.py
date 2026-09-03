@@ -38,9 +38,14 @@ class ForemanService:
     async def start(self, available_minutes: int | None) -> ScheduleState:
         thread_id = f"jit-{uuid.uuid4().hex[:12]}"
         pending = [t.model_dump(mode="json") for t in await self._tasks.get_pending_queue()]
+        completions = await self._tasks.recent_completions_for_scheduling()
         result = await asyncio.to_thread(
             self._graph.invoke,
-            {"pending_tasks": pending, "available_minutes": available_minutes},
+            {
+                "pending_tasks": pending,
+                "recent_completions": completions,
+                "available_minutes": available_minutes,
+            },
             self._cfg(thread_id),
         )
         return self._to_state(thread_id, result)

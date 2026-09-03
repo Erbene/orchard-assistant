@@ -52,6 +52,33 @@ class ResourceLine(BaseModel):
     unit: str
 
 
+class TemplateBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    min_gap_days: int = Field(ge=1, le=365)
+
+    @field_validator("category")
+    @classmethod
+    def _category_in_list(cls, value: str) -> str:
+        if value not in CATEGORIES:
+            raise ValueError(f"category must be one of {', '.join(CATEGORIES)}")
+        return value
+
+
+def _validate_blocks(value: list[TemplateBlock] | None) -> list[TemplateBlock]:
+    if not value:
+        return []
+    if len(value) > 8:
+        raise ValueError("blocks may contain at most 8 entries")
+    seen: set[str] = set()
+    for block in value:
+        if block.category in seen:
+            raise ValueError("blocks categories must be unique")
+        seen.add(block.category)
+    return value
+
+
 class TaskTemplateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,6 +97,7 @@ class TaskTemplateRead(BaseModel):
     valid_months: list[int] = Field(default_factory=list)
     biological_anchor: BiologicalAnchor | None = None
     anchor_offset_days: int | None = None
+    blocks: list[TemplateBlock] = Field(default_factory=list)
     source_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -92,6 +120,14 @@ class TaskTemplateUpdate(BaseModel):
     valid_months: list[int] | None = None
     biological_anchor: BiologicalAnchor | None = None
     anchor_offset_days: int | None = None
+    blocks: list[TemplateBlock] | None = None
+
+    @field_validator("blocks")
+    @classmethod
+    def _blocks(cls, value: list[TemplateBlock] | None) -> list[TemplateBlock] | None:
+        if value is None:
+            return None
+        return _validate_blocks(value)
 
 
 class BaselineQuestion(BaseModel):

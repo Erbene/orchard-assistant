@@ -14,12 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 Row = dict[str, Any]
 
-_JSON_COLUMNS = ("required_resources", "resource_plan", "source_ids", "valid_months")
+_JSON_COLUMNS = ("required_resources", "resource_plan", "source_ids", "valid_months", "blocks")
 _WRITABLE = (
     "name", "category", "rate_class", "interval_days", "estimated_minutes",
     "priority_score", "required_resources", "resource_plan", "baseline_question",
     "anchor_date", "source_ids", "valid_months", "biological_anchor",
-    "anchor_offset_days",
+    "anchor_offset_days", "blocks",
 )
 
 

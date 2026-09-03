@@ -93,6 +93,7 @@ class TaskRead(TaskBase):
     id: int
     tree_id: int
     template_id: int | None = None
+    template_category: str | None = None
     status: TaskStatus
     created_at: datetime
     completed_at: datetime | None = None

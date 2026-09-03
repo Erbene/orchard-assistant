@@ -20,6 +20,7 @@ Proactor loop uvicorn uses). ``ForemanService`` invokes it via
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -29,6 +30,7 @@ from langgraph.types import interrupt
 from ..config import Settings, get_settings
 from ..core.logging import get_logger
 from .escalation import Escalation, escalate
+from .schedule_rules import Completion, apply_blocks
 
 _log = get_logger("app.foreman")
 
@@ -94,10 +96,13 @@ def refit(
     proposed: list[Task],
     missing_resources: list[str],
     minutes: int,
+    *,
+    blocked_ids: set[int] | None = None,
 ) -> tuple[list[Task], list[Task]]:
     """Drop proposed tasks that need a tool the user lacks, then backfill the
     freed minutes from the rest of the backlog (also tool-free). Returns
     ``(final, dropped)``; dropped tasks carry a ``_drop_reason``."""
+    blocked_ids = blocked_ids or set()
     missing_lower = {m.strip().lower() for m in missing_resources}
     kept: list[Task] = []
     dropped: list[Task] = []
@@ -114,7 +119,9 @@ def refit(
         (
             t
             for t in all_tasks
-            if t["id"] not in handled and not _needs_any(t, missing_lower)
+            if t["id"] not in handled
+            and t["id"] not in blocked_ids
+            and not _needs_any(t, missing_lower)
         ),
         key=lambda t: t.get("_effective_score", 0.0) / _minutes(t),
         reverse=True,
@@ -206,14 +213,42 @@ def _narrate(state: "ForemanState") -> tuple[str, list[str]]:
 
 class ForemanState(TypedDict, total=False):
     pending_tasks: list[Task]
+    recent_completions: list[dict]
     available_minutes: int | None
     proposed_tasks: list[Task]
     required_resources: list[str]
     confirmed_resources: list[str]
     dropped_tasks: list[Task]
+    blocked_tasks: list[Task]
+    blocked_task_ids: set[int]
     escalations: list[Escalation]
     summary: str
     warnings: list[str]
+
+
+def _completions_from_state(raw: list[dict]) -> list[Completion]:
+    out: list[Completion] = []
+    for row in raw:
+        completed_raw = row.get("completed_on")
+        if not completed_raw:
+            continue
+        completed_on = (
+            date.fromisoformat(completed_raw)
+            if isinstance(completed_raw, str)
+            else completed_raw
+        )
+        category = row.get("category")
+        if not category:
+            continue
+        out.append(
+            Completion(
+                tree_id=int(row["tree_id"]),
+                category=str(category),
+                completed_on=completed_on,
+                blocks=list(row.get("blocks") or []),
+            )
+        )
+    return out
 
 
 def _time_check(state: ForemanState) -> dict:
@@ -225,10 +260,15 @@ def _time_check(state: ForemanState) -> dict:
 
 def _propose(state: ForemanState) -> dict:
     escalated, escalations = escalate(state.get("pending_tasks", []))
-    proposed = pack(escalated, int(state["available_minutes"]))
+    completions = _completions_from_state(state.get("recent_completions", []))
+    eligible, blocked = apply_blocks(escalated, completions, today=date.today())
+    proposed = pack(eligible, int(state["available_minutes"]))
     return {
         "pending_tasks": escalated,
         "proposed_tasks": proposed,
+        "blocked_tasks": blocked,
+        "blocked_task_ids": {t["id"] for t in blocked},
+        "dropped_tasks": blocked,
         "required_resources": resources_for(proposed),
         "escalations": escalations,
     }
@@ -250,8 +290,10 @@ def _finalize(state: ForemanState) -> dict:
         state.get("proposed_tasks", []),
         missing,
         int(state["available_minutes"]),
+        blocked_ids=state.get("blocked_task_ids") or set(),
     )
-    return {"proposed_tasks": final, "dropped_tasks": dropped}
+    blocked = state.get("blocked_tasks") or []
+    return {"proposed_tasks": final, "dropped_tasks": blocked + dropped}
 
 
 def _narrate_node(state: ForemanState) -> dict:

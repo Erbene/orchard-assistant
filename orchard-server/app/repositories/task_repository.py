@@ -105,7 +105,8 @@ class TaskRepository:
         day *plus* any unscheduled task (those always need placing).
         """
         sql = (
-            "SELECT t.*, tt.valid_months AS template_valid_months"
+            "SELECT t.*, tt.valid_months AS template_valid_months,"
+            " tt.category AS template_category"
             " FROM task t"
             " LEFT JOIN task_templates tt ON tt.id = t.template_id"
             " WHERE t.status = 'pending'"
@@ -126,6 +127,31 @@ class TaskRepository:
             row["template_valid_months"] = (
                 json.loads(vm) if isinstance(vm, str) else (vm or [])
             )
+            rows.append(row)
+        return rows
+
+    async def list_recent_completions(self, *, within_days: int = 90) -> list[Row]:
+        """Completed tasks joined to template category + blocks (scheduling rules)."""
+        result = await self._conn.execute(
+            text(
+                "SELECT t.tree_id, t.completed_at, tt.category AS template_category,"
+                " tt.blocks AS template_blocks"
+                " FROM task t"
+                " JOIN task_templates tt ON tt.id = t.template_id"
+                " WHERE t.status = 'completed'"
+                " AND t.completed_at >= now() - make_interval(days => :days)"
+                " ORDER BY t.completed_at DESC"
+            ),
+            {"days": within_days},
+        )
+        rows: list[Row] = []
+        for r in result.mappings().all():
+            row = dict(r)
+            blocks = row.get("template_blocks")
+            if isinstance(blocks, str):
+                row["template_blocks"] = json.loads(blocks)
+            elif blocks is None:
+                row["template_blocks"] = []
             rows.append(row)
         return rows
 

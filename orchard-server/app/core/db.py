@@ -132,6 +132,7 @@ _STARTUP_DDL: tuple[str, ...] = (
     "ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS valid_months JSONB NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS biological_anchor TEXT",
     "ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS anchor_offset_days INTEGER",
+    "ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS blocks JSONB NOT NULL DEFAULT '[]'::jsonb",
     # widen the task status enum: + 'skipped'
     "ALTER TABLE task DROP CONSTRAINT IF EXISTS task_status_check",
     "ALTER TABLE task ADD CONSTRAINT task_status_check CHECK (status IN ('pending', 'completed', 'deferred', 'skipped'))",

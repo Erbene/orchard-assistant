@@ -465,6 +465,12 @@ function TemplateRow({
           ? phenologyListsFromRead(phenology).dormancy
           : [];
   const caption = constraintCaption(template);
+  const blocksCaption =
+    template.blocks.length > 0
+      ? template.blocks
+          .map((b) => `blocks ${b.category} ${b.min_gap_days}d`)
+          .join(" · ")
+      : null;
 
   return (
     <li className="rounded-lg border p-3">
@@ -570,6 +576,10 @@ function TemplateRow({
             <p className="text-[11px] text-muted-foreground">{caption}</p>
           )}
         </div>
+      )}
+
+      {blocksCaption && (
+        <p className="mt-1 pl-1 text-[11px] text-muted-foreground">{blocksCaption}</p>
       )}
 
       {template.resource_plan.length > 0 && (

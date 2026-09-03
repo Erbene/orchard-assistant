@@ -165,6 +165,11 @@ export interface ResourceLine {
   unit: string;
 }
 
+export interface TemplateBlock {
+  category: CareCategory;
+  min_gap_days: number;
+}
+
 export interface TaskTemplate {
   id: number;
   tree_id: number;
@@ -181,6 +186,7 @@ export interface TaskTemplate {
   valid_months: number[];
   biological_anchor: BiologicalAnchor | null;
   anchor_offset_days: number | null;
+  blocks: TemplateBlock[];
   source_ids: number[];
   created_at: string;
   updated_at: string;

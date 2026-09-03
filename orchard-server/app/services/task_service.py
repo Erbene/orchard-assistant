@@ -10,6 +10,7 @@ import json
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 
+from ..agent.schedule_rules import Completion, ready_on
 from ..agent.schedule_solver import compute_window_closes_on, months_from_tree, next_due
 from ..repositories.task_repository import TaskRepository
 from ..repositories.task_template_repository import TaskTemplateRepository
@@ -95,15 +96,37 @@ class TaskService:
         rows = await self._tasks.list_pending(
             scheduled_before=scheduled_before.date() if scheduled_before else None
         )
+        rows = await self._heal_blocked_schedules(rows)
         enriched = [_enrich_window_fields(row) for row in rows]
         return [TaskRead.model_validate(r) for r in enriched]
 
     async def inbox(self) -> list[InboxTaskRead]:
         """The schedule inbox: pending tasks + template/tree labels + amounts,
         priority-then-date ordered."""
-        rows = [_enrich_window_fields(row) for row in await self._tasks.inbox()]
+        rows = await self._heal_blocked_schedules(await self._tasks.inbox())
+        rows = [_enrich_window_fields(row) for row in rows]
         rows.sort(key=lambda r: r.get("out_of_season", False))
         return [InboxTaskRead.model_validate(r) for r in rows]
+
+    async def recent_completions_for_scheduling(self) -> list[dict]:
+        """Completed care-plan tasks within 90 days, for cross-task block rules."""
+        out: list[dict] = []
+        for row in await self._tasks.list_recent_completions(within_days=90):
+            completed = _as_date(row.get("completed_at"))
+            if completed is None:
+                continue
+            blocks = row.get("template_blocks") or []
+            if isinstance(blocks, str):
+                blocks = json.loads(blocks)
+            out.append(
+                {
+                    "tree_id": row["tree_id"],
+                    "category": row["template_category"],
+                    "completed_on": completed.isoformat(),
+                    "blocks": blocks,
+                }
+            )
+        return out
 
     # -- writes -----------------------------------------------------
 
@@ -171,7 +194,10 @@ class TaskService:
             patch["completed_at"] = _now()
         closed = TaskRead.model_validate(await self._tasks.update(task_id, patch))
 
-        base = _as_date(closed.scheduled_date) or date.today()
+        if status == "completed":
+            after = _as_date(closed.completed_at) or date.today()
+        else:
+            after = date.today()
         template = None
         if closed.template_id and self._templates is not None:
             template = await self._templates.get(closed.template_id)
@@ -179,14 +205,14 @@ class TaskService:
         if template is not None:
             tree = await self._trees.get(closed.tree_id) or {}
             outcome = next_due(
-                after=base,
+                after=after,
                 interval_days=template["interval_days"],
                 valid_months=template.get("valid_months") or [],
                 biological_anchor=template.get("biological_anchor"),
                 anchor_offset_days=template.get("anchor_offset_days"),
                 phenology=_phenology_from_tree(tree),
             )
-            next_date = outcome.date or base
+            next_date = outcome.date or after
             await self._tasks.create(
                 {
                     "tree_id": closed.tree_id,
@@ -209,7 +235,7 @@ class TaskService:
                     "status": "pending",
                     "priority_score": closed.priority_score,
                     "scheduled_date": datetime.combine(
-                        base + timedelta(days=closed.frequency_days),
+                        after + timedelta(days=closed.frequency_days),
                         datetime.min.time(),
                         tzinfo=timezone.utc,
                     ),
@@ -298,3 +324,50 @@ class TaskService:
     async def _require_tree(self, tree_id: int) -> None:
         if await self._trees.get(tree_id) is None:
             raise DomainValidationError("tree_id", f"tree {tree_id} does not exist")
+
+    async def _load_completions(self) -> list[Completion]:
+        completions: list[Completion] = []
+        for row in await self._tasks.list_recent_completions(within_days=90):
+            completed = _as_date(row.get("completed_at"))
+            category = row.get("template_category")
+            if completed is None or not category:
+                continue
+            blocks = row.get("template_blocks") or []
+            if isinstance(blocks, str):
+                blocks = json.loads(blocks)
+            completions.append(
+                Completion(
+                    tree_id=row["tree_id"],
+                    category=category,
+                    completed_on=completed,
+                    blocks=blocks,
+                )
+            )
+        return completions
+
+    async def _heal_blocked_schedules(
+        self, rows: list[dict], *, today: date | None = None
+    ) -> list[dict]:
+        """Push blocked pending tasks forward to their first legal date (same row)."""
+        today = today or date.today()
+        completions = await self._load_completions()
+        healed: list[dict] = []
+        for row in rows:
+            category = row.get("template_category")
+            if not category:
+                healed.append(row)
+                continue
+            ready, _ = ready_on(category, row["tree_id"], completions, today=today)
+            if ready is None:
+                healed.append(row)
+                continue
+            current = _as_date(row.get("scheduled_date"))
+            if current is None or current < today or ready > current:
+                new_dt = datetime.combine(
+                    ready, datetime.min.time(), tzinfo=timezone.utc
+                )
+                updated = await self._tasks.update(row["id"], {"scheduled_date": new_dt})
+                healed.append(updated if updated is not None else {**row, "scheduled_date": new_dt})
+            else:
+                healed.append(row)
+        return healed

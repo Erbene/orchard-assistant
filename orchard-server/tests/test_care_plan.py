@@ -205,6 +205,91 @@ def test_edit_template_rescales_and_resyncs_open_task():
     _run(body)
 
 
+def test_complete_respawns_next_from_completion_date():
+    """Completing late must cooldown from completed_at, not scheduled_date."""
+    frozen = date(2026, 5, 31)
+
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 2.5}
+        ))["tree_id"]
+        tmpl = await templates.create(tid, {
+            "name": "Pest scouting",
+            "category": "scout",
+            "rate_class": "standard",
+            "interval_days": 30,
+            "estimated_minutes": 15,
+            "priority_score": 3.0,
+            "required_resources": [],
+            "resource_plan": [],
+            "blocks": [],
+        })
+        may1 = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        await tasks_repo.create({
+            "tree_id": tid,
+            "template_id": tmpl["id"],
+            "action_type": tmpl["name"],
+            "status": "pending",
+            "priority_score": tmpl["priority_score"],
+            "scheduled_date": may1,
+            "estimated_minutes": tmpl["estimated_minutes"],
+            "required_resources": tmpl["required_resources"],
+        })
+        open_row = await tasks_repo.open_for_template(tmpl["id"])
+        with patch("app.services.task_service._now") as mock_now:
+            mock_now.return_value = datetime.combine(
+                frozen, datetime.min.time(), tzinfo=timezone.utc
+            )
+            await tasks_svc.mark_complete(open_row["id"])
+        nxt = await tasks_repo.open_for_template(tmpl["id"])
+        assert nxt["scheduled_date"].date() >= frozen + timedelta(days=30)
+
+    _run(body)
+
+
+def test_skip_respawns_from_today_not_completion():
+    """Skip must not inherit a completion cooldown."""
+    scheduled = date(2026, 5, 1)
+    frozen = date(2026, 5, 31)
+
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 2.5}
+        ))["tree_id"]
+        tmpl = await templates.create(tid, {
+            "name": "Pest scouting",
+            "category": "scout",
+            "rate_class": "standard",
+            "interval_days": 30,
+            "estimated_minutes": 15,
+            "priority_score": 3.0,
+            "required_resources": [],
+            "resource_plan": [],
+            "blocks": [],
+        })
+        await tasks_repo.create({
+            "tree_id": tid,
+            "template_id": tmpl["id"],
+            "action_type": tmpl["name"],
+            "status": "pending",
+            "priority_score": tmpl["priority_score"],
+            "scheduled_date": datetime.combine(
+                scheduled, datetime.min.time(), tzinfo=timezone.utc
+            ),
+            "estimated_minutes": tmpl["estimated_minutes"],
+            "required_resources": tmpl["required_resources"],
+        })
+        open_row = await tasks_repo.open_for_template(tmpl["id"])
+        with patch("app.services.task_service.date") as mock_date:
+            mock_date.today.return_value = frozen
+            mock_date.side_effect = lambda *a, **k: date(*a, **k)
+            await tasks_svc.skip_task(open_row["id"])
+        nxt = await tasks_repo.open_for_template(tmpl["id"])
+        assert nxt["scheduled_date"].date() == frozen + timedelta(days=30)
+
+    _run(body)
+
+
 def test_complete_respawns_next_from_template():
     async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
         tid = (await trees.create(
@@ -221,8 +306,8 @@ def test_complete_respawns_next_from_template():
 
         nxt = await tasks_repo.open_for_template(scout.id)
         assert nxt is not None and nxt["id"] != first["id"]
-        assert nxt["scheduled_date"].date() == (
-            first["scheduled_date"].date() + timedelta(days=scout.interval_days)
+        assert nxt["scheduled_date"].date() == date.today() + timedelta(
+            days=scout.interval_days
         )
 
         # skip advances the recurrence too
