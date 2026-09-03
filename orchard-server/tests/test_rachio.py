@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date, datetime, timezone
 
 import httpx
 import pytest
@@ -16,6 +17,9 @@ from app.services.rachio import RachioService
 BASE = "https://api.rach.io/1/public"
 
 PERSON = {"id": "person-1"}
+_LAST_WATERED_MS = int(
+    datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc).timestamp() * 1000
+)
 ACCOUNT = {
     "id": "person-1",
     "devices": [
@@ -27,6 +31,7 @@ ACCOUNT = {
             "zones": [
                 {
                     "id": "z-1", "name": "Front Lawn", "enabled": True, "zoneNumber": 1,
+                    "lastWateredDate": _LAST_WATERED_MS,
                     "customSoil": {"name": "Clay Loam"},
                     "customCrop": {"name": "Cool Season Grass"},
                     "customNozzle": {"name": "Fixed Spray Head"},
@@ -57,17 +62,57 @@ def test_rachio_parses_devices_and_zones_and_caches():
             assert (z1.id, z1.name, z1.zone_number) == ("z-1", "Front Lawn", 1)
             assert z1.custom_soil == {"name": "Clay Loam"}
             assert z1.custom_crop == {"name": "Cool Season Grass"}
+            assert z1.last_watered_date == date(2026, 6, 14)
             assert z2.enabled is False
 
             # 10-minute cache: a second call hits neither endpoint again
             await svc.get_devices_and_zones()
             assert account.call_count == 1
 
+            respx.get(f"{BASE}/zone/z-2").mock(
+                return_value=httpx.Response(200, json={"id": "z-2", "name": "Flower Beds"})
+            )
             device, zone = await svc.get_zone("z-2")
             assert device.id == "dev-1" and zone.name == "Flower Beds"
 
             with pytest.raises(Exception):  # NotFoundError
                 await svc.get_zone("nope")
+        finally:
+            await svc.aclose()
+
+    asyncio.run(go())
+
+
+def test_get_zone_falls_back_to_zone_detail_for_last_watered_date():
+    account_no_dates = {
+        "id": "person-1",
+        "devices": [
+            {
+                "id": "dev-1",
+                "name": "Backyard Controller",
+                "status": "ONLINE",
+                "zones": [{"id": "z-1", "name": "Front Lawn", "enabled": True, "zoneNumber": 1}],
+            }
+        ],
+    }
+
+    @respx.mock
+    async def go():
+        respx.get(f"{BASE}/person/info").mock(return_value=httpx.Response(200, json=PERSON))
+        respx.get(f"{BASE}/person/person-1").mock(
+            return_value=httpx.Response(200, json=account_no_dates)
+        )
+        detail = respx.get(f"{BASE}/zone/z-1").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": "z-1", "name": "Front Lawn", "lastWateredDate": _LAST_WATERED_MS},
+            )
+        )
+        svc = RachioService(cfg())
+        try:
+            _, zone = await svc.get_zone("z-1")
+            assert zone.last_watered_date == date(2026, 6, 14)
+            assert detail.call_count == 1
         finally:
             await svc.aclose()
 

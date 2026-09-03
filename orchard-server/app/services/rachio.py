@@ -12,11 +12,12 @@ so ``get_devices_and_zones`` is cached for 10 minutes.
 from __future__ import annotations
 
 import time
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..config import Settings
 from ..core.logging import get_logger
@@ -47,6 +48,20 @@ class RachioZone(BaseModel):
     custom_slope: dict[str, Any] | None = Field(default=None, alias="customSlope")
     custom_crop: dict[str, Any] | None = Field(default=None, alias="customCrop")
     custom_shade: dict[str, Any] | None = Field(default=None, alias="customShade")
+    last_watered_date: date | None = Field(default=None, alias="lastWateredDate")
+
+    @field_validator("last_watered_date", mode="before")
+    @classmethod
+    def _parse_last_watered_date(cls, value: Any) -> date | None:
+        if value is None:
+            return None
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value / 1000, tz=timezone.utc).date()
+        return None
 
 
 class RachioDevice(BaseModel):
@@ -135,12 +150,33 @@ class RachioService:
         return self._devices
 
     async def get_zone(self, zone_id: str) -> tuple[RachioDevice, RachioZone]:
-        """Resolve one zone (and its device) from the cache. 404 if unknown."""
+        """Resolve one zone (and its device) from the cache. 404 if unknown.
+
+        When the nested person payload omits ``lastWateredDate``, falls back to
+        ``GET /zone/{id}`` (same client, no extra cache layer).
+        """
         for device in await self.get_devices_and_zones():
             for zone in device.zones:
                 if zone.id == zone_id:
+                    if zone.last_watered_date is None:
+                        zone = await self._enrich_zone_last_watered(zone_id, zone)
                     return device, zone
         raise NotFoundError(f"Rachio zone {zone_id!r} not found on this account")
+
+    async def _enrich_zone_last_watered(
+        self, zone_id: str, zone: RachioZone
+    ) -> RachioZone:
+        try:
+            data = (await self._request("GET", f"/zone/{zone_id}")).json()
+        except RachioError as exc:
+            _log.warning(
+                "rachio.zone.detail_failed",
+                zone_id=zone_id,
+                error=str(exc),
+            )
+            return zone
+        merged = {**zone.model_dump(by_alias=True), **data}
+        return RachioZone.model_validate(merged)
 
     # -- the one allowed write --------------------------------------
 

@@ -12,7 +12,7 @@ const ACTION_LABEL: Record<string, string> = {
   skip_schedule: "Skip the baseline schedule",
   adjust_duration: "Adjust the run duration",
   start_zone_watering: "Emergency run now",
-  pass_no_action: "No change",
+  pass_no_action: "Let the baseline schedule run",
 };
 
 const STATUS_STYLE: Record<ProposalStatus, string> = {
@@ -60,6 +60,10 @@ export function ProposalCard({
         ` (${solution.delta_minutes > 0 ? "+" : ""}${solution.delta_minutes} min)`
       : null;
 
+  const headline = proposal.summary || decision?.reason || "";
+  const supportingReason =
+    decision?.reason && decision.reason !== proposal.summary ? decision.reason : null;
+
   return (
     <div className="rounded-lg border p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -86,7 +90,11 @@ export function ProposalCard({
           ? ` · ${decision.days} day${decision.days === 1 ? "" : "s"}`
           : ""}
       </p>
-      <p className="mt-1 text-sm text-muted-foreground">{proposal.summary}</p>
+
+      {headline && <p className="mt-2 text-sm leading-relaxed">{headline}</p>}
+      {supportingReason && (
+        <p className="mt-1 text-sm text-muted-foreground">{supportingReason}</p>
+      )}
 
       {(durationLine || solution) && (
         <div className="mt-3 rounded-md bg-muted/40 p-2.5 text-xs">
@@ -110,8 +118,8 @@ export function ProposalCard({
       )}
 
       {proposal.deficit_score != null && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Water deficit score: {proposal.deficit_score}
+        <p className="mt-2 text-[11px] text-muted-foreground/80">
+          Deficit score: {proposal.deficit_score}
         </p>
       )}
 

@@ -6,9 +6,10 @@ import asyncio
 import math
 import urllib.request
 from contextlib import contextmanager
-from datetime import date
+from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from app.dependencies import get_settings_dep
 from app.irrigation import hardware, weather
 from app.irrigation.phenology import growth_stage, target_vwc_for_stage
 from app.irrigation.sensors import MoistureSensorService
+from app.irrigation.spacing import consecutive_water_blocked
 from app.main import app
 from app.repositories.irrigation_config_repository import IrrigationConfigRepository
 from app.repositories.irrigation_proposal_repository import IrrigationProposalRepository
@@ -37,11 +39,27 @@ from app.services.irrigation_service import (
     IrrigationConfigService,
     IrrigationSupervisorService,
 )
+from app.services.rachio import RachioDevice, RachioZone
 from app.services.water_balance import WaterBalanceService
 
 from conftest import stack_settings
 
 TODAY = date(2026, 6, 15)
+
+
+def test_consecutive_water_blocked():
+    assert consecutive_water_blocked(None, TODAY) is False
+    assert consecutive_water_blocked(TODAY, TODAY) is True
+    assert consecutive_water_blocked(TODAY - timedelta(days=1), TODAY) is True
+    assert consecutive_water_blocked(TODAY - timedelta(days=2), TODAY) is False
+
+
+def _mock_rachio_last_watered(last_watered: date | None):
+    zone = RachioZone(id="z-1", name="Front Lawn", last_watered_date=last_watered)
+    device = RachioDevice(id="dev-1", name="Backyard Controller")
+    svc = MagicMock()
+    svc.get_zone = AsyncMock(return_value=(device, zone))
+    return svc
 
 
 @pytest.fixture(autouse=True)
@@ -212,15 +230,20 @@ def _state(action_hint="dry"):
     }
 
 
-def test_pass_no_action_finishes_without_an_interrupt():
+def test_pass_no_action_interrupts_before_execute_with_a_summary():
     g = build_irrigation_graph(stack_settings(), MemorySaver())
     cfg = {"configurable": {"thread_id": "t-pass"}}
-    with fake_llm("pass_no_action"):
+    with fake_llm("pass_no_action", reason="deficit near zero", summary="Soil is comfortable — let the baseline run."):
         g.invoke(_state("wet"), cfg)
     snap = g.get_state(cfg)
-    assert snap.next == ()                       # ran to END
+    assert snap.next == ("execute_rachio_action",)       # paused for HITL
     assert snap.values["decision"]["action"] == "pass_no_action"
+    assert snap.values["summary"]
+    assert snap.values["decision"]["reason"]
     assert "result" not in snap.values           # execute_rachio_action never ran
+
+    g.invoke(None, cfg)                                        # approve -> resume
+    assert g.get_state(cfg).values["result"]["action"] == "pass_no_action"
 
 
 def test_watering_action_interrupts_before_execute_with_a_summary():
@@ -247,13 +270,36 @@ def test_llm_down_defers_to_baseline():
     snap = g.get_state(cfg)
     assert snap.values["decision"]["action"] == "pass_no_action"
     assert snap.values["llm_available"] is False
+    assert snap.next == ("execute_rachio_action",)             # queued for HITL
+    assert snap.values["summary"]
 
 
 # --------------------------------------------------------------------------
 # 4. supervisor service - run / approve / reject (DB + MemorySaver graph)
 # --------------------------------------------------------------------------
 
-def _run(body, *, llm_action="skip_schedule", auto_skip=False):
+def _amock(value):
+    from unittest.mock import AsyncMock
+
+    return AsyncMock(return_value=value)
+
+
+@contextmanager
+def _run_patches(llm_action, rachio_last_watered):
+    with patch("app.irrigation.weather.forecast", new=_amock(_forecast(0.0))), fake_llm(
+        llm_action
+    ):
+        if rachio_last_watered is not ...:
+            with patch(
+                "app.services.irrigation_service.get_rachio_service",
+                return_value=_mock_rachio_last_watered(rachio_last_watered),
+            ):
+                yield
+        else:
+            yield
+
+
+def _run(body, *, llm_action="skip_schedule", auto_skip=False, rachio_last_watered=...):
     settings = stack_settings()
 
     async def _wrap():
@@ -271,19 +317,12 @@ def _run(body, *, llm_action="skip_schedule", auto_skip=False):
                 cfg_svc = IrrigationConfigService(cfg_repo, trees, prop_repo)
                 if auto_skip:
                     await cfg_repo.update_supervisor({"auto_approve_skips": True})
-                with patch("app.irrigation.weather.forecast",
-                           new=_amock(_forecast(0.0))), fake_llm(llm_action):
+                with _run_patches(llm_action, rachio_last_watered):
                     return await body(conn, trees, sensors, svc, cfg_svc)
         finally:
             await db.dispose_all()
 
     return asyncio.run(_wrap())
-
-
-def _amock(value):
-    from unittest.mock import AsyncMock
-
-    return AsyncMock(return_value=value)
 
 
 def test_run_produces_a_pending_proposal_then_approve_executes():
@@ -324,11 +363,17 @@ def test_reject_leaves_the_action_unexecuted():
     _run(body)
 
 
-def test_pass_no_action_is_auto_recorded():
+def test_pass_no_action_queues_hitl_then_approve_executes():
     async def body(conn, trees, sensors, svc, cfg_svc):
         await trees.create({"species": "mango", "variety": "Kent", "zone_id": "z-1"})
         run = await svc.run(on_date=TODAY)
-        assert run.proposals[0].status == "no_action"
+        p = run.proposals[0]
+        assert p.status == "pending" and p.action == "pass_no_action"
+        assert p.summary and p.decision is not None and p.decision.reason
+
+        approved = await svc.approve(p.thread_id)
+        assert approved.status == "executed"
+        assert approved.result["action"] == "pass_no_action" and approved.result["dry_run"]
 
     _run(body, llm_action="pass_no_action")
 
@@ -340,6 +385,65 @@ def test_auto_approve_skips_executes_without_hitl():
         assert run.proposals[0].status == "executed"
 
     _run(body, llm_action="skip_schedule", auto_skip=True)
+
+
+def test_spacing_guard_rewrites_start_zone_watering_after_yesterday():
+    async def body(conn, trees, sensors, svc, cfg_svc):
+        await trees.create({"species": "mango", "variety": "Kent", "zone_id": "z-1"})
+        run = await svc.run(on_date=TODAY)
+        p = run.proposals[0]
+        assert p.action == "skip_schedule"
+        assert p.decision.days == 1
+        assert "2-day gap" in p.summary.lower()
+        assert p.status == "pending"
+
+    _run(
+        body,
+        llm_action="start_zone_watering",
+        rachio_last_watered=TODAY - timedelta(days=1),
+    )
+
+
+def test_spacing_guard_rewrites_pass_no_action_after_yesterday():
+    async def body(conn, trees, sensors, svc, cfg_svc):
+        await trees.create({"species": "mango", "variety": "Kent", "zone_id": "z-1"})
+        run = await svc.run(on_date=TODAY)
+        p = run.proposals[0]
+        assert p.action == "skip_schedule"
+        assert p.decision.days == 1
+        assert "2-day gap" in p.summary.lower()
+        assert p.status == "pending"
+
+    _run(
+        body,
+        llm_action="pass_no_action",
+        rachio_last_watered=TODAY - timedelta(days=1),
+    )
+
+
+def test_spacing_guard_allows_watering_after_two_day_gap():
+    async def body(conn, trees, sensors, svc, cfg_svc):
+        await trees.create({"species": "mango", "variety": "Kent", "zone_id": "z-1"})
+        run = await svc.run(on_date=TODAY)
+        assert run.proposals[0].action == "start_zone_watering"
+
+    _run(
+        body,
+        llm_action="start_zone_watering",
+        rachio_last_watered=TODAY - timedelta(days=2),
+    )
+
+
+def test_spacing_guard_noop_when_rachio_last_watered_unknown():
+    async def body(conn, trees, sensors, svc, cfg_svc):
+        await trees.create({"species": "mango", "variety": "Kent", "zone_id": "z-1"})
+        run = await svc.run(on_date=TODAY)
+        p = run.proposals[0]
+        assert p.action == "pass_no_action"
+        assert p.status == "pending"
+        assert p.summary and p.decision.reason
+
+    _run(body, llm_action="pass_no_action", rachio_last_watered=None)
 
 
 def test_config_overview_and_updates():

@@ -410,7 +410,22 @@ async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, A
 
         balance = await water.for_zone(zone_id, on_date=on_date)
         patch_ctx = _dead_ollama_patch() if seed.get("llm_down") else nullcontext()
-        with patch_ctx:
+        rachio_patch = nullcontext()
+        if "last_watered_date" in seed:
+            from unittest.mock import AsyncMock, MagicMock, patch
+
+            from app.services.rachio import RachioDevice, RachioZone
+
+            last = date.fromisoformat(seed["last_watered_date"])
+            zone = RachioZone(id=zone_id, name="eval", last_watered_date=last)
+            device = RachioDevice(id="eval-dev", name="eval")
+            mock_rachio = MagicMock()
+            mock_rachio.get_zone = AsyncMock(return_value=(device, zone))
+            rachio_patch = patch(
+                "app.services.irrigation_service.get_rachio_service",
+                return_value=mock_rachio,
+            )
+        with patch_ctx, rachio_patch:
             result = await svc.run(zone_ids=[zone_id], on_date=on_date)
 
     proposal = result.proposals[0] if result.proposals else None

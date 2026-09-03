@@ -234,8 +234,14 @@ CRON still has to fire `POST /api/v1/irrigation/supervisor/run` on a cadence.
   is the **whole-tree** rate; `tree.wetted_area_m2` is grower-supplied.
 - **HITL**: the graph pauses at `interrupt_before=["execute_rachio_action"]`;
   every deliberation is persisted as an `irrigation_proposal` row (the approval
-  queue). `pass_no_action` auto-records; `skip_schedule` auto-executes when
-  `auto_approve_skips` is on.
+  queue). `pass_no_action` (baseline would run) is queued for grower approval;
+  only `skip_schedule` auto-executes when `auto_approve_skips` is on.
+- **2-day spacing guard** (deterministic, post-LLM): before a proposal is saved,
+  Rachio `lastWateredDate` is read for the zone. If the zone was watered today or
+  yesterday, any watering action (`pass_no_action`, `adjust_duration`,
+  `start_zone_watering`) is rewritten to a 1-day `skip_schedule` so the baseline
+  does not run back-to-back. Missing Rachio data or an unset field does not block.
+  Dry-run Approve in tests does not advance Rachio's timestamp.
 - **[app/tools/irrigation.py](app/tools/irrigation.py)** gains
   `rachio_set_run_duration(zone, minutes, days)`.
 - **`irrigation_zone_config`** (per-zone baseline minutes / days / supervised)

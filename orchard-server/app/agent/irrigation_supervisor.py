@@ -1,13 +1,13 @@
 """The Irrigation Supervisor - a checkpointed LangGraph that reviews one zone a
 day, BEFORE its baseline Rachio schedule runs, and proposes one action:
 
-    START -> deliberate ──(pass_no_action)──────────────────────────► END
-                       └──(skip / adjust / emergency)─► contention ─► summarize ─► execute_rachio_action ─► END
-                                                                                  ▲ interrupt_before
+    START -> deliberate -> contention -> summarize -> execute_rachio_action -> END
+                                                                  ▲ interrupt_before
 
-Every action that touches Rachio pauses at ``execute_rachio_action`` for
-Human-In-The-Loop approval (``IrrigationSupervisorService`` reads the paused
-state into an ``irrigation_proposal`` row; the UI resumes/aborts it).
+Every action (including ``pass_no_action`` when the baseline would run) pauses
+at ``execute_rachio_action`` for Human-In-The-Loop approval
+(``IrrigationSupervisorService`` reads the paused state into an
+``irrigation_proposal`` row; the UI resumes/aborts it).
 
 The graph is **synchronous** (Postgres checkpointer + sync psycopg pool - async
 psycopg can't run on Windows' Proactor loop). Deterministic pre-processing
@@ -178,9 +178,6 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
             "llm_available": True,
         }
 
-    def _route(state: IrrigationSupervisorState) -> str:
-        return "done" if state["decision"]["action"] == "pass_no_action" else "plan"
-
     def _contention(state: IrrigationSupervisorState) -> dict:
         hydro = [
             TreeHydro(
@@ -288,7 +285,7 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
     g.add_node("summarize", _summarize)
     g.add_node("execute_rachio_action", _execute_rachio_action)
     g.add_edge(START, "deliberate")
-    g.add_conditional_edges("deliberate", _route, {"plan": "contention", "done": END})
+    g.add_edge("deliberate", "contention")
     g.add_edge("contention", "summarize")
     g.add_edge("summarize", "execute_rachio_action")
     g.add_edge("execute_rachio_action", END)

@@ -15,6 +15,11 @@ from typing import Any
 from ..config import Settings
 from ..core.logging import get_logger
 from ..core.tracing import traced
+from ..irrigation.spacing import (
+    WATERING_ACTIONS,
+    consecutive_water_blocked,
+    spacing_skip_summary,
+)
 from ..repositories.irrigation_config_repository import IrrigationConfigRepository
 from ..repositories.irrigation_proposal_repository import IrrigationProposalRepository
 from ..repositories.tree_repository import TreeRepository
@@ -29,7 +34,8 @@ from ..schemas.irrigation import (
     ZoneConfigUpdate,
     ZoneSolutionOut,
 )
-from .exceptions import DomainValidationError, NotFoundError
+from .exceptions import DomainValidationError, NotFoundError, RachioError, RachioNotConfigured
+from .rachio import get_rachio_service
 from .water_balance import WaterBalanceService
 
 _log = get_logger("app.irrigation")
@@ -152,10 +158,10 @@ class IrrigationSupervisorService:
 
             proposal = self._proposal_row(thread_id, zone_id, on_date, snap)
 
-            if proposal["action"] == "pass_no_action":
-                proposal["status"] = "no_action"
-                proposal["resolved_at"] = _now()
-            elif proposal["action"] == "skip_schedule" and sup_cfg["auto_approve_skips"]:
+            last_watered = await self._fetch_last_watered_date(zone_id)
+            self._apply_spacing_guard(proposal, on_date, last_watered)
+
+            if proposal["action"] == "skip_schedule" and sup_cfg["auto_approve_skips"]:
                 result = await self._resume(thread_id)
                 proposal["status"] = "executed"
                 proposal["result"] = result
@@ -233,6 +239,46 @@ class IrrigationSupervisorService:
         await asyncio.to_thread(self._graph.invoke, None, self._cfg(thread_id))
         snap = await asyncio.to_thread(self._graph.get_state, self._cfg(thread_id))
         return snap.values.get("result")
+
+    async def _fetch_last_watered_date(self, zone_id: str) -> date | None:
+        try:
+            _, zone = await get_rachio_service(self._settings).get_zone(zone_id)
+        except RachioNotConfigured:
+            return None
+        except (RachioError, NotFoundError) as exc:
+            _log.warning(
+                "irrigation.spacing.rachio_unavailable",
+                zone_id=zone_id,
+                error=str(exc),
+            )
+            return None
+        if zone.last_watered_date is None:
+            _log.info("irrigation.spacing.last_watered_unknown", zone_id=zone_id)
+        return zone.last_watered_date
+
+    @staticmethod
+    def _apply_spacing_guard(
+        proposal: dict, on_date: date, last_watered: date | None
+    ) -> None:
+        if not consecutive_water_blocked(last_watered, on_date):
+            return
+        if proposal["action"] not in WATERING_ACTIONS:
+            return
+
+        summary = spacing_skip_summary(last_watered, on_date)  # type: ignore[arg-type]
+        proposal["action"] = "skip_schedule"
+        proposal["status"] = "pending"
+        proposal["summary"] = summary
+        decision = proposal["payload"]["decision"]
+        decision["action"] = "skip_schedule"
+        decision["days"] = 1
+        decision["reason"] = summary
+        _log.info(
+            "irrigation.spacing.rewrite",
+            zone_id=proposal["zone_id"],
+            last_watered=str(last_watered),
+            for_date=str(on_date),
+        )
 
     def _proposal_row(
         self, thread_id: str, zone_id: str, on_date: date, snap: Any
