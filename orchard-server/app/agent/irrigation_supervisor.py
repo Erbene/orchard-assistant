@@ -92,10 +92,14 @@ IRRIGATION_SUPERVISOR_PROMPT: str = (
 
 SUPERVISOR_SUMMARY_PROMPT: str = (
     "Write ONE plain-language sentence (max 40 words) for the grower explaining "
-    "WHY this irrigation change is proposed. Cite the concrete numbers you are "
-    "given (deficit score, soil VWC %, rain mm, run minutes). No preamble, no "
-    "hedging. Example style: '30mm rain forecast and soil is at 28% VWC - "
-    "proposing a 2-day skip and trimming the next run to 15 min to save water.'"
+    "WHY this irrigation change is proposed. Cite only numbers you are actually "
+    "given (deficit score, soil VWC %, rain mm, and - only if a run duration is "
+    "part of what you were given - run minutes). No preamble, no hedging.\n\n"
+    "A schedule SKIP has no run length - do not state or invent one, even "
+    "approximately. Example for a skip: '30mm rain forecast and soil is at 28% "
+    "VWC - proposing a 2-day skip to save water.'\n\n"
+    "Example for a duration change: 'Soil is at 15% VWC, a 6-point deficit - "
+    "proposing a 27 min run instead of the scheduled 25 min to close the gap.'"
 )
 
 
@@ -106,9 +110,9 @@ def _template_summary(state: IrrigationSupervisorState, decision: dict, sol: Zon
         parts.append(f"{fc} mm rain forecast")
     action = decision["action"]
     if action == "skip_schedule":
+        # A skip carries no run duration (see `_contention`) - never narrate
+        # one here, even though the solver still computes one for its trace.
         parts.append(f"proposing a {decision.get('days', 1)}-day skip")
-        if sol and sol.recommended_minutes != sol.baseline_minutes:
-            parts.append(f"then a {sol.recommended_minutes} min run (was {sol.baseline_minutes})")
     elif action == "adjust_duration" and sol:
         parts.append(
             f"proposing {sol.recommended_minutes} min instead of {sol.baseline_minutes}"
@@ -202,8 +206,13 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
             decision["duration_minutes"] = sol.recommended_minutes
             if sol.recommended_minutes <= 0:
                 decision["duration_minutes"] = 15
-        # skip_schedule stays a pure skip - it carries no run duration, even
-        # though the solver still computes one for the "thoughts" trace.
+        else:
+            # skip_schedule (and pass_no_action) carry no run duration, even
+            # though the solver still computes one for the "thoughts" trace,
+            # and even if `_deliberate`'s LLM output a nonzero guess for the
+            # unused field. Zero it here so it's canonically clean wherever
+            # `decision` is read downstream (summarize payload, Rachio call).
+            decision["duration_minutes"] = 0
 
         return {"decision": decision, "solution": dataclasses.asdict(sol)}
 
@@ -211,11 +220,38 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
         decision = state["decision"]
         sol_dict = state.get("solution") or {}
         sol = _sol_from_dict(sol_dict) if sol_dict else None
+        decision_for_payload = decision
+        if decision["action"] == "skip_schedule" and sol_dict:
+            # A skip carries no run duration (see `_contention`) - don't hand
+            # the model any solver field that *states* a run length as the
+            # proposed action, or a local model paraphrases it as the plan
+            # ("trim the next run to 7 minutes"). `rationale` is prose built
+            # from `recommended_minutes` (e.g. "reduce the run from 25 to 7
+            # min") - drop it along with the raw minute fields. Keep
+            # `thoughts` / `per_tree` (candidates *considered*, not
+            # recommended) so the summary can still explain why the skip is
+            # right.
+            sol_dict = {
+                k: v
+                for k, v in sol_dict.items()
+                if k
+                not in (
+                    "recommended_minutes",
+                    "baseline_minutes",
+                    "delta_minutes",
+                    "rationale",
+                )
+            }
+            # Same for `decision` - it's always zeroed for a skip (see
+            # `_contention`), but a bare 0 still invites a local model to
+            # narrate "a zero-minute run". Drop the key instead of zeroing it
+            # in the copy the model sees.
+            decision_for_payload = {k: v for k, v in decision.items() if k != "duration_minutes"}
         payload = {
             "deficit_score": state["deficit_score"],
             "rain_last_24h_mm": state.get("rain_24h_mm"),
             "forecast_rain_next_24h_mm": state.get("forecast_rain_24h_mm"),
-            "decision": decision,
+            "decision": decision_for_payload,
             "solver": sol_dict,
             "trees": [
                 {"species": t.get("species"), "current_vwc": t.get("current_vwc")}
