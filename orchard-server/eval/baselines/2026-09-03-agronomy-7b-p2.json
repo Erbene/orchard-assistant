@@ -1,0 +1,262 @@
+{
+  "generated_at": "2026-09-03T18:45:17.806031+00:00",
+  "n": 6,
+  "exact_pass": 6,
+  "exact_rate": 1.0,
+  "judge_pass": 6,
+  "judge_total": 6,
+  "judge_rate": 1.0,
+  "grounded_rows": 6,
+  "claims_total": 20,
+  "claims_ok": 20,
+  "unsupported_claims": 0,
+  "fabricated_citations": 0,
+  "groundedness_rate": 1.0,
+  "passed": true,
+  "rows": [
+    {
+      "id": "chat-agronomy-01-watering",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply specifies the watering frequency for a young citrus tree as once a week, as per the grower's note, and references the source.",
+      "grounding": {
+        "claims_total": 1,
+        "supported": 1,
+        "general_knowledge": 0,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "You should water a young citrus tree deeply once a week during the dry season.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the retrieved context, which states to water a young citrus tree deeply once a week during the dry season."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "According to the information provided in the [PRIORITY 1 SOURCE: Citrus care (ID: 1)], you should water a young citrus tree deeply once a week during the dry season, allowing the top inch of soil to dry out between waterings. Mature trees require water every two to three weeks.",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-02-yellow-leaves",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant attributes the yellowing leaves to nitrogen deficiency, cites the grower's note, and suggests a balanced fertilizer, meeting the criterion.",
+      "grounding": {
+        "claims_total": 3,
+        "supported": 3,
+        "general_knowledge": 0,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "Yellowing leaves on a young mango tree are most likely due to nitrogen deficiency.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the retrieved context, which states that yellowing leaves on a young mango almost always mean nitrogen deficiency."
+          },
+          {
+            "claim": "Apply a balanced fertilizer such as 8-3-9 to address the issue.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the retrieved context, which explicitly recommends using a balanced fertilizer such as 8-3-9 to address nitrogen deficiency in young mango trees."
+          },
+          {
+            "claim": "Ensure that the soil is not waterlogged to prevent yellowing of the foliage.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the retrieved context, which mentions that waterlogged roots can also yellow the foliage."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "Based on the information provided in the [PRIORITY 1 SOURCE: Mango nutrition (ID: 1)], yellowing leaves on a young mango tree are most likely due to nitrogen deficiency. To address this issue, apply a balanced fertilizer such as 8-3-9. Additionally, ensure that the soil is not waterlogged, as this can also cause yellowing of the foliage.\n\nThis recommendation is based on the specific advice given in the higher-priority source.",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-03-general-knowledge",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply provides the correct pH range for blueberries (4.0-5.5) and attributes this information to general horticultural knowledge, not the grower's notes.",
+      "grounding": {
+        "claims_total": 1,
+        "supported": 0,
+        "general_knowledge": 1,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "Blueberry bushes prefer acidic soil with a pH range of 4.0 to 5.5.",
+            "verdict": "general_knowledge",
+            "reason": "The claim about blueberry bushes preferring acidic soil is plausible general horticultural knowledge and the assistant explicitly states it comes from general knowledge rather than the provided sources."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "The soil pH requirement for blueberry bushes is not addressed in the provided sources. According to general horticultural knowledge, blueberry bushes prefer acidic soil with a pH range of 4.0 to 5.5. This information is based on the general needs of blueberry plants and is not contradicted by the sources provided.\n\nFor more specific and detailed information, you may want to consult a dedicated resource on blueberry cultivation.",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-04-not-covered",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply clearly states that the information is from general horticultural knowledge and not from the provided notes, and does not fabricate a citation.",
+      "grounding": {
+        "claims_total": 7,
+        "supported": 4,
+        "general_knowledge": 3,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "It is generally recommended to apply nitrogen fertilizer in a balanced manner throughout the growing season for avocado trees.",
+            "verdict": "general_knowledge",
+            "reason": "The claim about applying nitrogen fertilizer in a balanced manner throughout the growing season for avocado trees is plausible general horticultural knowledge, and the assistant explicitly states that this information comes from general horticultural knowledge rather than the linked notes."
+          },
+          {
+            "claim": "A common approach is to apply a balanced fertilizer (such as 10-10-10 or 20-20-20) in multiple applications, typically four times a year.",
+            "verdict": "supported",
+            "reason": "The claim about applying a balanced fertilizer four times a year is supported by the assistant's reply, which explicitly states it is a common approach based on general horticultural knowledge."
+          },
+          {
+            "claim": "The amount of nitrogen can vary based on the tree's age, size, and soil conditions.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the assistant's reply, which states that 'the amount of nitrogen can vary based on the tree's age, size, and soil conditions.'"
+          },
+          {
+            "claim": "A general guideline is to apply about 1/4 to 1/2 pound of actual nitrogen per year of the tree's age, up to a maximum of 6 pounds per year for mature trees.",
+            "verdict": "general_knowledge",
+            "reason": "The claim about nitrogen application is not in the retrieved context but is plausible general horticultural knowledge, and the assistant explicitly states it comes from general knowledge."
+          },
+          {
+            "claim": "For a 5-year-old avocado tree, you might apply about 1.25 to 2.5 pounds of actual nitrogen per year, split into four applications.",
+            "verdict": "general_knowledge",
+            "reason": "The claim about nitrogen application for avocado trees is not in the retrieved context but is plausible general horticultural knowledge, and the assistant explicitly states it comes from general knowledge."
+          },
+          {
+            "claim": "Over-fertilization can lead to excessive vegetative growth at the expense of fruit production and can also harm the tree.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the assistant's use of general horticultural knowledge and is consistent with the provided context."
+          },
+          {
+            "claim": "Always ensure to follow soil test recommendations and adjust the nitrogen application rate accordingly.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the assistant's use of general horticultural knowledge and is explicitly stated in the reply."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "The provided sources do not contain specific information about nitrogen doses for avocado trees. Therefore, I will use my general horticultural knowledge to provide an answer.\n\nFor avocado trees, it is generally recommended to apply nitrogen fertilizer in a balanced manner throughout the growing season. A common approach is to apply a balanced fertilizer (such as 10-10-10 or 20-20-20) in multiple applications, typically four times a year. The amount of nitrogen can vary based on the tree's age, size, and soil conditions, but a general guideline is to apply about 1/4 to 1/2 pound of actual nitr",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-05-pest-id",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant correctly identifies the white cottony masses as mealybugs and recommends horticultural oil and ant control as per the grower's note.",
+      "grounding": {
+        "claims_total": 4,
+        "supported": 4,
+        "general_knowledge": 0,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "The white cottony stuff on your mango stems is likely mealybugs.",
+            "verdict": "supported",
+            "reason": "The claim about the white cottony stuff being mealybugs is directly supported by the retrieved context."
+          },
+          {
+            "claim": "Small white cottony masses on mango stems and leaf axils are indicative of mealybug infestations.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the retrieved context, which explicitly states that small white cottony masses on mango stems and leaf axils are indicative of mealybug infestations."
+          },
+          {
+            "claim": "To control mealybugs, treat the affected areas with horticultural oil.",
+            "verdict": "supported",
+            "reason": "The claim to treat mealybugs with horticultural oil is directly supported by the retrieved context."
+          },
+          {
+            "claim": "Mealybugs are often farmed by ants.",
+            "verdict": "supported",
+            "reason": "The claim that mealybugs are often farmed by ants is directly supported by the retrieved context."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "The white cottony stuff on your mango stems is likely mealybugs. According to the [PRIORITY 1 SOURCE: Mango pests (ID: 1)], small white cottony masses on mango stems and leaf axils are indicative of mealybug infestations. To control this issue, treat the affected areas with horticultural oil. Additionally, since mealybugs are often farmed by ants, controlling the ant population is also important.\n\nFollow the advice from the higher-priority source to address the mealybug problem effectively.",
+        "tools": [],
+        "redirect": false
+      }
+    },
+    {
+      "id": "chat-agronomy-06-groundedness-negative-control",
+      "channel": "chat",
+      "category": "agronomy",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply correctly notes the relevance of the sources, does not present an invented mix rate/interval, and clearly flags that the specific mix rate and days between sprays are not cited from a source.",
+      "grounding": {
+        "claims_total": 4,
+        "supported": 4,
+        "general_knowledge": 0,
+        "unsupported": 0,
+        "fabricated_citations": [],
+        "claims": [
+          {
+            "claim": "Apply copper fungicide in early summer for citrus greasy spot.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the information provided in the first source, which states to apply copper fungicide in early summer for citrus greasy spot."
+          },
+          {
+            "claim": "Apply copper fungicide again in early fall for citrus greasy spot.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the information provided in the first source, which states to apply copper fungicide in early summer and again in early fall for citrus greasy spot."
+          },
+          {
+            "claim": "You should consult the product label or manufacturer's guidelines for the specific mix rate and days between sprays of the copper fungicide.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the assistant's statement that you should consult the product label or manufacturer's guidelines for the specific mix rate and days between sprays."
+          },
+          {
+            "claim": "Copper fungicides are effective for managing citrus greasy spot.",
+            "verdict": "supported",
+            "reason": "The claim is directly supported by the information provided in the first source, which states that copper fungicide should be applied in early summer and again in early fall for managing citrus greasy spot."
+          }
+        ]
+      },
+      "error": null,
+      "observed": {
+        "route": "agronomy",
+        "answer": "The linked sources provide information on the timing and application of copper fungicides for citrus greasy spot, but the second source is not relevant to the question at hand. Therefore, we will rely on the information provided in the first source.\n\nAccording to [PRIORITY 1 SOURCE: Citrus fungicide (ID: 1)], for citrus greasy spot, you should apply copper fungicide in early summer and again in early fall. The specific mix rate and days between sprays are not provided in this source. However, for precise details on the mix rate and application intervals, you should refer to the recommended dos",
+        "tools": [],
+        "redirect": false
+      }
+    }
+  ]
+}

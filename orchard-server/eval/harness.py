@@ -49,10 +49,27 @@ _INIT_SQL = Path(__file__).resolve().parent.parent / "docker" / "postgres" / "in
 
 
 def eval_settings(**overrides: Any) -> Settings:
+    """Settings for the eval run - deliberately pins every field the dataset's
+    intended answers depend on, not just db/collection/ollama-host.
+
+    ``hemisphere`` and ``irrigation_target_vwc`` feed
+    ``app.irrigation.phenology.growth_stage`` / ``target_vwc_for_stage`` ->
+    every irrigation row's ``deficit_score`` and the solver's ``target_vwc``;
+    ``agent_model`` / ``agronomist_model`` pick which local model actually
+    answers. All four come from the developer's ``.env`` by default
+    (``app.config.Settings``) - unpinned, a baseline recorded on one machine
+    is not reproducible on another (a real problem once code, not just
+    prose, is being submitted). Every dataset row and baseline in
+    ``eval/baselines/`` was authored/measured against these exact values.
+    """
     base: dict[str, Any] = {
         "postgres_db": EVAL_DB,
         "chroma_collection": EVAL_COLLECTION,
         "ollama_base_url": REAL_OLLAMA,
+        "hemisphere": "N",
+        "irrigation_target_vwc": 25.0,
+        "agent_model": "qwen2.5:7b-instruct",
+        "agronomist_model": "qwen2.5:7b-instruct",
     }
     base.update(overrides)
     return Settings(**base)
@@ -336,6 +353,30 @@ async def run_schedule(
     return {"states": states, "reports": reports, "final_status": final}
 
 
+def _dead_ollama_patch() -> Any:
+    """Context manager that makes the supervisor's ``_deliberate`` LLM call
+    fail, exercising the ``pass_no_action`` LLM-down fallback
+    (``irrigation_supervisor.py``'s ``_deliberate`` except branch).
+
+    The Postgres-checkpointed graph is built once and cached by
+    ``(kind, dsn)`` (``app.agent.checkpointer``) - not by ``ollama_base_url``
+    - so an ``eval_settings(ollama_base_url=...)`` override would silently be
+    ignored by an already-built graph. ``ChatOllama`` is constructed fresh
+    inside ``_deliberate`` on every graph invocation though, so patching the
+    imported name (mirroring ``tests/test_irrigation_supervisor.py``'s
+    ``fake_llm(down=True)``) reliably fails just this one call regardless of
+    when the graph was compiled.
+    """
+    from unittest.mock import MagicMock, patch
+
+    dead = MagicMock()
+    dead.with_structured_output = MagicMock(
+        side_effect=RuntimeError("eval: ollama unreachable")
+    )
+    dead.invoke = MagicMock(side_effect=RuntimeError("eval: ollama unreachable"))
+    return patch("app.agent.irrigation_supervisor.ChatOllama", return_value=dead)
+
+
 async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, Any]:
     """Drive the real irrigation supervisor for one zone.
 
@@ -343,7 +384,13 @@ async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, A
     stub moisture / rain-bucket / NWS forecast. Runs
     ``IrrigationSupervisorService.run`` and returns the resulting proposal (the
     HITL queue row) plus the pre-LLM zone water balance for observability.
+
+    ``seed.llm_down: true`` simulates Ollama being unreachable for the
+    supervisor's deliberation call (see :func:`_dead_ollama_patch`) - the
+    weather-only degrade path (``forecast.available: false``) is separate and
+    covered by ``irr-07``.
     """
+    from contextlib import nullcontext
     from datetime import date
 
     seed = row.get("seed", {})
@@ -362,7 +409,9 @@ async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, A
         )
 
         balance = await water.for_zone(zone_id, on_date=on_date)
-        result = await svc.run(zone_ids=[zone_id], on_date=on_date)
+        patch_ctx = _dead_ollama_patch() if seed.get("llm_down") else nullcontext()
+        with patch_ctx:
+            result = await svc.run(zone_ids=[zone_id], on_date=on_date)
 
     proposal = result.proposals[0] if result.proposals else None
     return {

@@ -3,6 +3,7 @@ graph (sync + interrupt_before), and the run / approve / reject service flow."""
 from __future__ import annotations
 
 import asyncio
+import math
 import urllib.request
 from contextlib import contextmanager
 from datetime import date
@@ -69,8 +70,8 @@ def test_phenology_targets_track_stage():
 # 2. Zone Contention Solver (ToT + beam search)
 # --------------------------------------------------------------------------
 
-def _hydro(species, vwc, gph=8.0, wetted_area=None, spread=3.0):
-    return zs.TreeHydro(hash(species) & 0xFFFF, species, vwc, spread, gph, wetted_area)
+def _hydro(species, vwc, gph=8.0, wetted_area=None, spread=3.0, target_vwc=None):
+    return zs.TreeHydro(hash(species) & 0xFFFF, species, vwc, spread, gph, wetted_area, target_vwc)
 
 
 def test_volume_math_matches_the_spec_formula():
@@ -107,6 +108,71 @@ def test_solver_skips_when_rain_is_coming():
     trees = [_hydro("mango", 24.0), _hydro("jaboticaba", 25.0)]
     sol = zs.solve(trees, baseline_minutes=30, forecast_rain_24h_mm=25.0)
     assert sol.recommended_minutes <= 10 and sol.delta_minutes < 0
+
+
+# -- target-tracking path (previously zero unit coverage - only the eval's
+# 10 irrigation rows exercised target_vwc != None) --------------------------
+
+def test_target_tracking_separates_candidates_that_used_to_tie():
+    # Both post-VWCs sit in mango's flat interior (band [18, 26]) - with no
+    # target the guards are 0 for both, so they tie at penalty 0.0 exactly.
+    assert zs.penalty("mango", 20.0) == 0.0
+    assert zs.penalty("mango", 25.0) == 0.0
+    # A target breaks the tie: 25 is within the deadband of target 26 (still
+    # free), but 20 is more than the deadband away and picks up a cost - the
+    # candidate closer to the phenology target now scores strictly lower.
+    near = zs.penalty("mango", 25.0, target_vwc=26.0)
+    far = zs.penalty("mango", 20.0, target_vwc=26.0)
+    assert near == 0.0
+    assert far > near
+
+
+def test_clamp_keeps_target_inside_the_comfort_band():
+    # mango: sat=31 -> band top is sat - _SOFT_MARGIN = 26. A fruit_development
+    # target of 27 sits past the tree's own saturation guard and is pulled down.
+    assert zs.clamp_target_vwc("mango", 27.0) == pytest.approx(26.0)
+    # jaboticaba: wilt=23 -> band bottom is wilt + _SOFT_MARGIN = 28. The same
+    # 27 target sits *under* this thirstier species' guard and is pulled up.
+    assert zs.clamp_target_vwc("jaboticaba", 27.0) == pytest.approx(28.0)
+    # a target already inside the band passes through unchanged.
+    assert zs.clamp_target_vwc("mango", 22.0) == pytest.approx(22.0)
+    # the clamp actually takes effect inside penalty(), not just standalone -
+    # an out-of-band target scores identically to its clamped equivalent.
+    for post in (18.0, 20.0, 25.0, 26.0):
+        assert zs.penalty("mango", post, target_vwc=27.0) == zs.penalty(
+            "mango", post, target_vwc=26.0
+        )
+
+
+def test_guards_still_dominate_near_hard_thresholds():
+    # Even chasing an out-of-band target, a post-VWC inside the saturation
+    # guard's climb costs far more than one that respects it - the guard
+    # wins the target/guard conflict, per the owner's dry-side-bias decision.
+    safe = zs.penalty("mango", 25.0, target_vwc=27.0)     # under the guard
+    wet = zs.penalty("mango", 29.0, target_vwc=27.0)      # into the guard
+    assert safe == 0.0
+    assert wet > safe + 1.0
+
+    # End-to-end regression for the irr-04 bug: a mild deficit (6 points)
+    # against a target (27) that conflicts with mango's own saturation guard
+    # (26) used to push the solver to the grid ceiling (53 min, +28 over a
+    # 25 min baseline - see eval/results/20260903T181124Z.json). The clamp +
+    # deadband fix keeps it a mild adjustment.
+    trees = [_hydro("mango", 21.0, wetted_area=1.5, target_vwc=27.0)]
+    sol = zs.solve(trees, baseline_minutes=25)
+    assert sol.recommended_minutes < 53
+    assert sol.delta_minutes < 28
+
+
+def test_none_target_reproduces_the_old_guard_only_behaviour():
+    # No phenology target -> penalty() must be pure drought/saturation guard
+    # math, byte-for-byte, with zero contribution from the tracking term.
+    for post in (10.0, 18.0, 20.0, 26.0, 29.0, 35.0):
+        prof = zs.profile_for("mango")
+        drought = math.exp(prof.k_wilt * max(0.0, (prof.wilt_vwc + zs._SOFT_MARGIN) - post)) - 1.0
+        saturation = math.exp(prof.k_sat * max(0.0, post - (prof.sat_vwc - zs._SOFT_MARGIN))) - 1.0
+        assert zs.penalty("mango", post) == round(drought + saturation, 3)
+        assert zs.penalty("mango", post) == zs.penalty("mango", post, target_vwc=None)
 
 
 # --------------------------------------------------------------------------

@@ -1,0 +1,216 @@
+{
+  "generated_at": "2026-09-03T18:43:11.483600+00:00",
+  "n": 11,
+  "exact_pass": 11,
+  "exact_rate": 1.0,
+  "judge_pass": 4,
+  "judge_total": 11,
+  "judge_rate": 0.36363636363636365,
+  "grounded_rows": 0,
+  "claims_total": 0,
+  "claims_ok": 0,
+  "unsupported_claims": 0,
+  "fabricated_citations": 0,
+  "groundedness_rate": 1.0,
+  "passed": true,
+  "rows": [
+    {
+      "id": "irr-01-skip-rain-coming",
+      "channel": "irrigation",
+      "category": "irrigation-skip",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The assistant's reply does not explicitly state that it is skipping or suppressing the scheduled irrigation due to the forecasted rain and current soil condition.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "skip_schedule",
+        "status": "pending",
+        "deficit_score": -18.0,
+        "recommended_minutes": 7,
+        "delta_minutes": -18,
+        "summary": "Propose a 3-day skip and no irrigation, as a 25 mm rain forecast will exceed the soil's 20% VWC, addressing the -18.0 deficit score."
+      }
+    },
+    {
+      "id": "irr-02-skip-already-wet",
+      "channel": "irrigation",
+      "category": "irrigation-skip",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The assistant's reply does not directly state that the run is not needed because the soil is already at or above the moisture target. Instead, it introduces a deficit score and a 2-day skip plan.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "skip_schedule",
+        "status": "pending",
+        "deficit_score": -6.0,
+        "recommended_minutes": 7,
+        "delta_minutes": -18,
+        "summary": "Proposing a 2-day skip and zeroing the next run to save water due to a deficit score of -6.0 and no rain forecast."
+      }
+    },
+    {
+      "id": "irr-03-pass-comfortable",
+      "channel": "irrigation",
+      "category": "irrigation-pass",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The reply mentions a deficit score and zone uniformity, which are not part of the given criterion. It does not explicitly state that no action is needed and the baseline schedule should run as-is.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "pass_no_action",
+        "status": "no_action",
+        "deficit_score": 3.0,
+        "recommended_minutes": null,
+        "delta_minutes": null,
+        "summary": "The deficit score is 3.0, which is close to zero, and the zone is uniform with mango trees in fruit development, so letting the baseline schedule run unchanged is appropriate."
+      }
+    },
+    {
+      "id": "irr-04-pass-slightly-dry",
+      "channel": "irrigation",
+      "category": "irrigation-pass",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The assistant's reply triggers an emergency run by proposing to increase the irrigation duration, which does not align with treating the small moisture deficit as within tolerance.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "adjust_duration",
+        "status": "pending",
+        "deficit_score": 6.0,
+        "recommended_minutes": 27,
+        "delta_minutes": 2,
+        "summary": "Proposing to increase the irrigation duration to 27 minutes for 0 days to bring the soil moisture to 22.5%, addressing the deficit score of 6.0."
+      }
+    },
+    {
+      "id": "irr-05-emergency-dry-fruitset",
+      "channel": "irrigation",
+      "category": "irrigation-emergency",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant's reply recognises the severe moisture deficit during the sensitive fruit set stage and proposes immediate watering, aligning with the user's message.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "start_zone_watering",
+        "status": "pending",
+        "deficit_score": 18.0,
+        "recommended_minutes": 53,
+        "delta_minutes": 28,
+        "summary": "Proposing to start watering Zone 1 for 53 minutes to address the high deficit score of 18.0, as mango trees are in fruit set stage and there's no rain forecast."
+      }
+    },
+    {
+      "id": "irr-06-skip-rain-bucket",
+      "channel": "irrigation",
+      "category": "irrigation-skip",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The reply does not account for the 20 mm of rain already in the gauge as explicitly stated in the criterion.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "skip_schedule",
+        "status": "pending",
+        "deficit_score": -11.0,
+        "recommended_minutes": 7,
+        "delta_minutes": -18,
+        "summary": "Proposing a 3-day skip to reduce the deficit score from -11.0 and allow soil to dry to 24%."
+      }
+    },
+    {
+      "id": "irr-07-forecast-unavailable",
+      "channel": "irrigation",
+      "category": "irrigation-degrade",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply provides a coherent irrigation decision based solely on soil moisture, as instructed.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "start_zone_watering",
+        "status": "pending",
+        "deficit_score": 12.0,
+        "recommended_minutes": 53,
+        "delta_minutes": 28,
+        "summary": "Start watering for 53 minutes to raise soil moisture to 19.4%, addressing the high deficit score of 12.0 and supporting mango fruit development."
+      }
+    },
+    {
+      "id": "irr-08-heterogeneous-zone",
+      "channel": "irrigation",
+      "category": "irrigation-contention",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The reply does not propose a single run duration that balances the drier jaboticaba against the mango's lower tolerance for wet roots. Instead, it provides a specific irrigation duration and VWC targets without addressing the balance between the two plants.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "adjust_duration",
+        "status": "pending",
+        "deficit_score": 7.0,
+        "recommended_minutes": 53,
+        "delta_minutes": 28,
+        "summary": "Proposing to increase the irrigation duration to 53 minutes for 0 days due to a deficit score of 7.0, aiming for 28.4% VWC in mango and 25.0% in jaboticaba."
+      }
+    },
+    {
+      "id": "irr-09-no-sensor",
+      "channel": "irrigation",
+      "category": "irrigation-pass",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The reply correctly states that with no moisture sensor reading and no rain signal, the deficit score is zero and no action is taken.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "pass_no_action",
+        "status": "no_action",
+        "deficit_score": 0.0,
+        "recommended_minutes": null,
+        "delta_minutes": null,
+        "summary": "The deficit score is exactly zero, and there's no need to deviate from the baseline schedule."
+      }
+    },
+    {
+      "id": "irr-10-auto-approve-skip",
+      "channel": "irrigation",
+      "category": "irrigation-skip",
+      "exact_fails": [],
+      "judge": "fail",
+      "judge_reason": "The reply does not simply execute the skip as instructed, but instead proposes changes to the watering schedule.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "skip_schedule",
+        "status": "executed",
+        "deficit_score": -6.0,
+        "recommended_minutes": 7,
+        "delta_minutes": -18,
+        "summary": "Proposing a 2-day skip and trimming the next run to 7 minutes to reduce overwatering, with a deficit score of -6.0."
+      }
+    },
+    {
+      "id": "irr-11-llm-down-safe-pass",
+      "channel": "irrigation",
+      "category": "irrigation-degrade",
+      "exact_fails": [],
+      "judge": "pass",
+      "judge_reason": "The assistant's reply states that the LLM was unavailable and explicitly defers to the baseline schedule, matching the criterion.",
+      "grounding": null,
+      "error": null,
+      "observed": {
+        "action": "pass_no_action",
+        "status": "no_action",
+        "deficit_score": 18.0,
+        "recommended_minutes": null,
+        "delta_minutes": null,
+        "summary": "LLM unavailable - deferred to the baseline schedule."
+      }
+    }
+  ]
+}

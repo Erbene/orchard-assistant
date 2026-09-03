@@ -187,23 +187,74 @@ _SOFT_MARGIN = 5.0   # VWC points before a hard threshold where the penalty star
 # against the eval before nudging - this is a starting value, not a derived one.
 _TARGET_TRACKING_WEIGHT = 0.08
 
+# Deadband (VWC points) around the clamped target inside which the tracking
+# term costs nothing. Clamping alone (see clamp_target_vwc) is not sufficient
+# when the *clamped* target is itself unreachable within the grid ceiling
+# (53 min): the tracking term keeps falling monotonically as duration climbs
+# toward the ceiling because the flat interior never actually reaches the
+# target, so a *mild* deficit still proposed the grid-ceiling run - measured
+# on irr-04 (a 6-point deficit inside the tolerance band): clamp-only still
+# produced 53 min (eval run 2026-09-03T18:11Z, orchard-server/eval/results/
+# 20260903T181124Z.json). This deadband stops that chase once the post-run
+# VWC is "close enough": the existing fewest-minutes tie-break then picks the
+# driest candidate in the now-flat zero-penalty region (the owner's "on any
+# tie, prefer less water" rule). 3.5 was chosen by sweeping 1.0-5.0 against
+# the eval's irrigation channel: it brings irr-04 down to a 27 min / +2 min
+# adjustment (was 53 / +28) while a genuinely large, grid-reachable gap still
+# gets watered most of the way there (an 8-point gap synthetic case moved
+# from a 0-point undershoot at deadband=0 to a 3.5-point undershoot - i.e. it
+# stops exactly at the deadband edge, not before). Severe-deficit rows
+# (irr-05, irr-07 - the drought *guard*, not this term, is what drives them)
+# are untouched at every deadband tested up to 5.0: they stay at the 53 min
+# grid ceiling because the guard difference between candidates dwarfs any
+# tracking delta this deadband could hide. A deadband much larger than this
+# (5.0 was tested) starts neutering genuine tracking on reachable gaps too -
+# a 20-min-short case rounds all the way down to baseline - so this is a
+# floor, not a free parameter to raise further without re-running the sweep.
+_TARGET_DEADBAND_VWC = 3.5
+
+
+def clamp_target_vwc(species: str, target_vwc: float) -> float:
+    """Pull a phenology ``target_vwc`` back inside the species' comfort band
+    ``[wilt_vwc + _SOFT_MARGIN, sat_vwc - _SOFT_MARGIN]`` before it can enter
+    the objective.
+
+    Owner decision: underwatering is preferred over overwatering. Without
+    this, a growth-stage target that sits past a species' own saturation
+    guard (mango's ``fruit_development`` target is 27% VWC, but its guard
+    starts biting at ``sat_vwc - _SOFT_MARGIN`` = 26%) pulls the objective
+    toward a point the guard is built to punish - penalty keeps *falling* as
+    duration climbs toward the grid ceiling because the flat interior never
+    reaches the (unreachable) target. Clamping means the guard wins on any
+    target/guard conflict, and the tracking term never fights the guard it
+    shares a species profile with.
+    """
+    prof = profile_for(species)
+    band_lo = prof.wilt_vwc + _SOFT_MARGIN
+    band_hi = prof.sat_vwc - _SOFT_MARGIN
+    if band_lo > band_hi:  # pathologically narrow profile - collapse to the midpoint
+        return (band_lo + band_hi) / 2.0
+    return min(max(target_vwc, band_lo), band_hi)
+
 
 def penalty(species: str, post_vwc: float, target_vwc: float | None = None) -> float:
     """Exponential drought / saturation penalty, plus - when a phenology
-    ``target_vwc`` is known - a small linear pull toward it. Near-zero while
-    the tree sits comfortably in its band *and* close to target; climbs
-    steeply as it nears (and passes) the species' wilt or saturation
-    threshold, where the guard terms take back over regardless of target."""
+    ``target_vwc`` is known - a small linear pull toward it (clamped into the
+    species' comfort band first, see :func:`clamp_target_vwc`, then given a
+    ``_TARGET_DEADBAND_VWC`` no-cost zone around it). Near-zero while the
+    tree sits comfortably in its band *and* close to target; climbs steeply
+    as it nears (and passes) the species' wilt or saturation threshold, where
+    the guard terms take back over regardless of target."""
     prof = profile_for(species)
     drought_gap = (prof.wilt_vwc + _SOFT_MARGIN) - post_vwc
     saturation_gap = post_vwc - (prof.sat_vwc - _SOFT_MARGIN)
     drought = math.exp(prof.k_wilt * max(0.0, drought_gap)) - 1.0
     saturation = math.exp(prof.k_sat * max(0.0, saturation_gap)) - 1.0
-    tracking = (
-        _TARGET_TRACKING_WEIGHT * abs(post_vwc - target_vwc)
-        if target_vwc is not None
-        else 0.0
-    )
+    tracking = 0.0
+    if target_vwc is not None:
+        clamped = clamp_target_vwc(species, target_vwc)
+        beyond_deadband = max(0.0, abs(post_vwc - clamped) - _TARGET_DEADBAND_VWC)
+        tracking = _TARGET_TRACKING_WEIGHT * beyond_deadband
     return round(drought + saturation + tracking, 3)
 
 

@@ -18,6 +18,15 @@ Needs the `postgres` + `chromadb` containers up (`../dev.ps1` or
 `qwen2.5:7b-instruct` pulled. Exit code is non-zero when the run is below the
 bar (see `report.THRESHOLDS`).
 
+`harness.eval_settings()` pins every field the dataset's intended answers
+depend on — `postgres_db`, `chroma_collection`, `ollama_base_url`,
+`hemisphere` (`"N"`), `irrigation_target_vwc` (`25.0`), `agent_model` and
+`agronomist_model` (`qwen2.5:7b-instruct`) — regardless of what a developer's
+local `.env` sets. `hemisphere` / `irrigation_target_vwc` feed
+`app.irrigation.phenology.growth_stage` / `target_vwc_for_stage`, which every
+irrigation row's `deficit_score` and the solver's `target_vwc` derive from; a
+baseline recorded with different values is not comparable across machines.
+
 ## What it exercises
 
 | channel | driver | graded on |
@@ -45,7 +54,7 @@ real `orchard` data is never touched. The Foreman's narration model
 ## Groundedness (`grounding.py`)
 
 Checks whether an Agronomist answer actually traces back to what was
-retrieved, for the 5 `chat-agronomy-*` rows (the only rows that route to
+retrieved, for the `chat-agronomy-*` rows (the only rows that route to
 `agronomy` and retrieve anything). Three checks, cheapest first:
 
 1. **Citation validity** — deterministic, no LLM. The Agronomist prompt tells
@@ -66,12 +75,27 @@ claim absent from the retrieved context is not automatically a hallucination;
 only `unsupported` (absent from context *and* not flagged as general
 knowledge) is the real hallucination bucket.
 
+**Negative control — `chat-agronomy-06-groundedness-negative-control`.** The
+first 5 rows scored 21/21 supported claims, 0 unsupported, 0 fabricated
+citations — a metric that has never fired is unfalsified, not validated. This
+row seeds two linked sources (one irrelevant) and asks the model to "combine
+both and cite both source ids" for a dosage detail neither source states —
+pressure that, in manual sampling (7 runs against the pinned
+`qwen2.5:7b-instruct`, temperature 0.2 — the Agronomist's fixed setting, not
+eval-controlled), produced a **fabricated citation** (`ID: 3` invented for the
+general-knowledge block, which is explicitly labelled "no ID") on **2 of 7**
+runs, caught every time by `grounding.fabricated_citations()`. This proves the
+checker *can* detect a real failure — but the trigger is probabilistic (LLM
+sampling), not deterministic, so don't expect this row to fail every run; a
+quiet run here is not itself evidence the grader is broken. See
+`future_work/capstone-gap-analysis.md` P2 for the measurement.
+
 **Advisory only** — printed in the scorecard and saved to the JSON summary,
-but not in `report.THRESHOLDS` and does not affect `passed`. With 5 qualifying
-rows and a local 7B model grading another local 7B model's claims, this is far
-too noisy to gate a run on; a dip is a cue to read the per-claim detail
-(`rows[].grounding.claims`) in the saved JSON, the same way a judge dip is a
-cue to read the transcript.
+but not in `report.THRESHOLDS` and does not affect `passed`. With few
+qualifying rows and a local 7B model grading another local 7B model's claims,
+this is far too noisy to gate a run on; a dip is a cue to read the per-claim
+detail (`rows[].grounding.claims`) in the saved JSON, the same way a judge dip
+is a cue to read the transcript.
 
 ## Results
 
@@ -141,7 +165,12 @@ growth-stage lookup and the forecast date), `trees` (each may carry `zone_id`,
 `canopy_spread_m`, `estimated_gph`, `wetted_area_m2`, and `current_vwc` — which
 pins a stub moisture sensor for that tree), `forecast` (`{"qpf_mm": N}` or
 `{"available": false}`), `rain_bucket_mm` (the 24 h gauge total),
-`auto_approve_skips` (bool → supervisor config).
+`auto_approve_skips` (bool → supervisor config), `llm_down` (bool — patches
+`ChatOllama` inside `irrigation_supervisor.py` to raise for this row only, so
+the supervisor's `_deliberate` LLM-unavailable fallback runs for real; see
+`irr-11-llm-down-safe-pass`. Distinct from `forecast: {"available": false}`
+(`irr-07`), which only kills the *weather* call — the supervisor's own LLM
+call still succeeds there).
 
 `resumes` entry keys (schedule): `available_minutes`, `have_resources`,
 `complete` (action-type names → ids), `report` (free text),
