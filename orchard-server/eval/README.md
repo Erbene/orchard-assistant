@@ -24,6 +24,7 @@ bar (see `report.THRESHOLDS`).
 | --- | --- | --- |
 | `chat` | the real Orchestrator graph (`build_graph`) — routing + retrieval + Agronomist | `route`, tool call + args, `redirect`, answer keywords, an AI-judge rubric |
 | `schedule` | the real Foreman negotiation (`ForemanService` + Postgres checkpointer) | the `step` sequence across interrupts, which tasks are proposed/dropped/escalated, overdue warnings, and that **no task status changes** until an explicit completion |
+| `irrigation` | the real water-saving supervisor (`IrrigationSupervisorService.run` + zone solver + Postgres-checkpointed HITL graph) | the proposal's `action`, whether it queued for HITL approval, the solver's run-duration delta / bounds, and the sign of the pre-LLM deficit score |
 
 Everything runs against a disposable `orchard_eval` database + an
 `orchard_knowledge_eval` Chroma collection, truncated between scenarios. Your
@@ -38,6 +39,39 @@ real `orchard` data is never touched. The Foreman's narration model
   the row's one-sentence `rubric`. Advisory and a bit noisy; lower bar (85%).
   A judge failure means *look at the transcript*, not necessarily *the code is
   broken*.
+- **Groundedness** (`grounding.py`) — advisory, agronomy chat rows only (see
+  below).
+
+## Groundedness (`grounding.py`)
+
+Checks whether an Agronomist answer actually traces back to what was
+retrieved, for the 5 `chat-agronomy-*` rows (the only rows that route to
+`agronomy` and retrieve anything). Three checks, cheapest first:
+
+1. **Citation validity** — deterministic, no LLM. The Agronomist prompt tells
+   the model to cite the source id(s) it used; any cited id that isn't among
+   the ids actually retrieved is a **fabricated citation**.
+   `chat-agronomy-04-not-covered` exists to catch exactly this.
+2. **Claim extraction** — one LLM call breaks the answer into atomic factual
+   claims (capped at 8).
+3. **Per-claim verification** — one LLM call per claim, run concurrently, each
+   scored `supported` / `general_knowledge` / `unsupported` against the
+   retrieved context.
+
+`general_knowledge` is a distinct bucket, not a fudge: the Agronomist's system
+prompt *explicitly* allows it to answer from its own horticultural knowledge,
+ranked below every linked source, as long as it says so —
+`chat-agronomy-03-general-knowledge` is designed to be answered this way. A
+claim absent from the retrieved context is not automatically a hallucination;
+only `unsupported` (absent from context *and* not flagged as general
+knowledge) is the real hallucination bucket.
+
+**Advisory only** — printed in the scorecard and saved to the JSON summary,
+but not in `report.THRESHOLDS` and does not affect `passed`. With 5 qualifying
+rows and a local 7B model grading another local 7B model's claims, this is far
+too noisy to gate a run on; a dip is a cue to read the per-claim detail
+(`rows[].grounding.claims`) in the saved JSON, the same way a judge dip is a
+cue to read the transcript.
 
 ## Results
 
@@ -82,9 +116,32 @@ Schedule row:
             "db_after": {"completed_action_types": []}}}
 ```
 
+Irrigation row:
+
+```json
+{"id": "irr-01-skip-rain-coming", "channel": "irrigation", "category": "irrigation-skip",
+ "seed": {"zone": {"zone_id": "irr-z1", "baseline_minutes": 25},
+          "on_date": "2026-06-15",
+          "forecast": {"qpf_mm": 25.0},
+          "trees": [{"species": "mango", "variety": "Kent", "zone_id": "irr-z1",
+                     "canopy_spread_m": 3.0, "estimated_gph": 8.0,
+                     "wetted_area_m2": 1.5, "current_vwc": 20.0}]},
+ "expect": {"action": "skip_schedule", "hitl": true, "status": "pending",
+            "deficit_score_sign": "negative"},
+ "rubric": "Explains it is skipping the scheduled irrigation because rain is forecast."}
+```
+
 `seed` keys: `trees`, `tasks` (a task may carry `days_old` → sets an overdue
 `scheduled_date`), `n_tasks` (N generic tasks named `task 1`…`task N`),
 `sources` (`name` + `text`, ingested into the KB).
+
+Irrigation `seed` keys: `zone` (`zone_id` + optional `baseline_minutes` /
+`baseline_frequency_days` / `supervised`), `on_date` (`YYYY-MM-DD`, drives the
+growth-stage lookup and the forecast date), `trees` (each may carry `zone_id`,
+`canopy_spread_m`, `estimated_gph`, `wetted_area_m2`, and `current_vwc` — which
+pins a stub moisture sensor for that tree), `forecast` (`{"qpf_mm": N}` or
+`{"available": false}`), `rain_bucket_mm` (the 24 h gauge total),
+`auto_approve_skips` (bool → supervisor config).
 
 `resumes` entry keys (schedule): `available_minutes`, `have_resources`,
 `complete` (action-type names → ids), `report` (free text),
@@ -96,3 +153,8 @@ Schedule row:
 `proposed_action_types`, `not_proposed_action_types`, `dropped_action_types`,
 `escalated_action_types`, `warnings_contain`, `summary_present`,
 `max_proposed_minutes`, `report_marked`, `db_after.completed_action_types`.
+irrigation: `action` (string or list), `status` (string or list), `hitl`
+(bool — proposal is a pending approval), `no_proposal` (bool),
+`duration_delta` (`negative`/`zero`/`positive` — the solver's run vs baseline),
+`recommended_minutes_min` / `recommended_minutes_max`, `deficit_score_sign`
+(`negative`/`positive`), `forecast_available` (bool).

@@ -16,18 +16,30 @@ from typing import Any
 import asyncpg
 from sqlalchemy import text
 
-from app.agent.checkpointer import close_checkpointers, ensure_foreman_graph
+from app.agent.checkpointer import (
+    close_checkpointers,
+    ensure_foreman_graph,
+    ensure_irrigation_graph,
+)
 from app.agent.graph import build_graph
 from app.config import Settings, get_settings
 from app.core import db
+from app.irrigation import hardware, weather
+from app.irrigation.sensors import MoistureSensorService
 from app.rag.vector_store import get_vector_store
+from app.repositories.irrigation_config_repository import IrrigationConfigRepository
+from app.repositories.irrigation_proposal_repository import IrrigationProposalRepository
+from app.repositories.moisture_sensor_repository import MoistureSensorRepository
 from app.repositories.source_repository import SourceRepository
 from app.repositories.task_repository import TaskRepository
 from app.repositories.tree_repository import TreeRepository
 from app.schemas.chat import ChatMessageIn
+from app.schemas.irrigation import DailyForecast, WeatherForecast
 from app.services.foreman_service import ForemanService
+from app.services.irrigation_service import IrrigationSupervisorService
 from app.services.source_service import SourceService
 from app.services.task_service import TaskService
+from app.services.water_balance import WaterBalanceService
 
 EVAL_DB = "orchard_eval"
 EVAL_COLLECTION = "orchard_knowledge_eval"
@@ -105,6 +117,8 @@ async def reset(settings: Settings) -> None:
         get_vector_store(settings).clear()
     except Exception:  # noqa: BLE001
         pass
+    hardware.reset()       # stub moisture / rain-bucket overrides
+    weather.reset()        # forecast cache + eval override
 
 
 def ollama_up() -> bool:
@@ -132,12 +146,14 @@ async def seed(settings: Settings, spec: dict[str, Any]) -> dict[str, int]:
     Returns ``{action_type: task_id}`` for the tasks it created, so a scenario
     can refer to tasks by name and the grader can resolve ids.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import date, datetime, timedelta, timezone
 
     task_ids: dict[str, int] = {}
     async with db.connection(settings) as conn:
         trees = TreeRepository(conn)
         tasks = TaskRepository(conn)
+        probes = MoistureSensorRepository(conn)
+        irr_cfg = IrrigationConfigRepository(conn)
         sources = SourceService(
             SourceRepository(conn), trees, get_vector_store(settings), settings
         )
@@ -145,9 +161,21 @@ async def seed(settings: Settings, spec: dict[str, Any]) -> dict[str, int]:
         default_tree_id: int | None = None
         for t in spec.get("trees", []):
             row = await trees.create(
-                {"species": t.get("species", "mango"), "variety": t.get("variety", "Kent")}
+                {
+                    "species": t.get("species", "mango"),
+                    "variety": t.get("variety", "Kent"),
+                    "zone_id": t.get("zone_id"),
+                    "height_m": t.get("height_m"),
+                    "canopy_spread_m": t.get("canopy_spread_m"),
+                    "estimated_gph": t.get("estimated_gph"),
+                    "wetted_area_m2": t.get("wetted_area_m2"),
+                }
             )
             default_tree_id = row["tree_id"]
+            if t.get("current_vwc") is not None:
+                sid = f"eval-s{row['tree_id']}"
+                await probes.create({"id": sid, "label": "eval", "tree_id": row["tree_id"]})
+                hardware.set_moisture(sid, float(t["current_vwc"]))
         if spec.get("tasks") and default_tree_id is None:
             default_tree_id = (await trees.create({"species": "mango", "variety": "Kent"}))["tree_id"]
 
@@ -186,6 +214,48 @@ async def seed(settings: Settings, spec: dict[str, Any]) -> dict[str, int]:
         for s in spec.get("sources", []):
             await sources.ingest_text(s["name"], s["text"])
 
+        # -- irrigation scenario setup -----------------------------------
+        zone = spec.get("zone")
+        if zone:
+            await irr_cfg.upsert_zone(
+                zone["zone_id"],
+                {
+                    k: zone[k]
+                    for k in ("baseline_minutes", "baseline_frequency_days", "supervised")
+                    if k in zone
+                },
+            )
+        if "auto_approve_skips" in spec:
+            await irr_cfg.update_supervisor(
+                {"auto_approve_skips": bool(spec["auto_approve_skips"])}
+            )
+
+    if "rain_bucket_mm" in spec:
+        hardware.set_rain_bucket_24h(float(spec["rain_bucket_mm"]))
+
+    fc = spec.get("forecast")
+    if fc is not None:
+        if fc.get("available") is False:
+            weather.set_forecast(
+                WeatherForecast(available=False, error="eval: forecast unavailable")
+            )
+        else:
+            on = date.fromisoformat(spec["on_date"])
+            weather.set_forecast(
+                WeatherForecast(
+                    available=True,
+                    fetched_at=datetime.now(timezone.utc),
+                    source="eval",
+                    daily=[
+                        DailyForecast(
+                            date=on,
+                            qpf_mm=float(fc.get("qpf_mm", 0.0)),
+                            pop_pct=fc.get("pop_pct"),
+                        )
+                    ],
+                )
+            )
+
     return task_ids
 
 
@@ -214,6 +284,9 @@ async def run_chat(settings: Settings, messages: list[dict[str, str]]) -> dict[s
         "tool_calls": result.get("tool_calls", []) or [],
         "redirect": result.get("redirect"),
         "task_ids": result.get("task_ids", []) or [],
+        # Agronomist retrieval provenance (only the "agronomy" route sets it) -
+        # used by eval/grounding.py's advisory groundedness check.
+        "retrieved": result.get("retrieved") or [],
     }
 
 
@@ -261,3 +334,38 @@ async def run_schedule(
         }
 
     return {"states": states, "reports": reports, "final_status": final}
+
+
+async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, Any]:
+    """Drive the real irrigation supervisor for one zone.
+
+    ``seed`` has already created the zone config, trees, sensors, and pinned the
+    stub moisture / rain-bucket / NWS forecast. Runs
+    ``IrrigationSupervisorService.run`` and returns the resulting proposal (the
+    HITL queue row) plus the pre-LLM zone water balance for observability.
+    """
+    from datetime import date
+
+    seed = row.get("seed", {})
+    zone_id = seed["zone"]["zone_id"]
+    on_date = date.fromisoformat(seed["on_date"]) if seed.get("on_date") else None
+
+    graph = await ensure_irrigation_graph(settings)
+    async with db.connection(settings) as conn:
+        trees = TreeRepository(conn)
+        sensors = MoistureSensorService(MoistureSensorRepository(conn), trees)
+        water = WaterBalanceService(sensors, trees, settings)
+        cfg = IrrigationConfigRepository(conn)
+        proposals = IrrigationProposalRepository(conn)
+        svc = IrrigationSupervisorService(
+            water, trees, cfg, proposals, graph, settings
+        )
+
+        balance = await water.for_zone(zone_id, on_date=on_date)
+        result = await svc.run(zone_ids=[zone_id], on_date=on_date)
+
+    proposal = result.proposals[0] if result.proposals else None
+    return {
+        "proposal": proposal.model_dump(mode="json") if proposal else None,
+        "balance": balance.model_dump(mode="json"),
+    }

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, TypedDict
 
+from ..services.source_service import FusedSource
 from .orchestrator import Route
 
 
@@ -21,3 +22,9 @@ class OrchestratorState(TypedDict, total=False):
     answer: str                    # final assistant text
     redirect: dict[str, str] | None   # {"href": "/schedule", "label": "..."}
     tool_calls: list[dict[str, Any]]  # [{"tool", "args", "result"}]
+    # Agronomist retrieval provenance - internal only (offline groundedness
+    # checks in eval/grounding.py). Never surface this in an HTTP/SSE response;
+    # ChatService.stream_reply names its response fields explicitly and does
+    # not serialize state, so this does not leak on its own, but don't add it
+    # to a response model either.
+    retrieved: list[FusedSource]

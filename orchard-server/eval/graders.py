@@ -114,6 +114,81 @@ def grade_schedule(
     return fails
 
 
+def grade_irrigation(expect: dict[str, Any], result: dict[str, Any]) -> list[str]:
+    """Check the supervisor's proposal for one zone.
+
+    ``expect`` keys: ``action`` (str | list), ``status`` (str | list),
+    ``hitl`` (bool - proposal is a pending approval), ``no_proposal`` (bool),
+    ``duration_delta`` ('negative'|'zero'|'positive'), ``recommended_minutes_max``,
+    ``recommended_minutes_min``, ``deficit_score_sign`` ('negative'|'positive'),
+    ``forecast_available`` (bool).
+    """
+    fails: list[str] = []
+    proposal = result.get("proposal")
+    balance = result.get("balance") or {}
+
+    if expect.get("no_proposal"):
+        if proposal is not None:
+            fails.append(f"expected no proposal, got action={proposal.get('action')!r}")
+        return fails
+
+    if proposal is None:
+        return ["no proposal produced"]
+
+    decision = proposal.get("decision") or {}
+    action = decision.get("action") or proposal.get("action")
+    want_actions = _as_list(expect.get("action"))
+    if want_actions and action not in want_actions:
+        fails.append(f"action={action!r}, want one of {want_actions}")
+
+    want_status = _as_list(expect.get("status"))
+    if want_status and proposal.get("status") not in want_status:
+        fails.append(f"status={proposal.get('status')!r}, want one of {want_status}")
+
+    if "hitl" in expect:
+        is_pending = proposal.get("status") == "pending"
+        if is_pending != bool(expect["hitl"]):
+            fails.append(f"hitl (pending)={is_pending}, want {bool(expect['hitl'])}")
+
+    solution = proposal.get("solution")
+    if "duration_delta" in expect:
+        if solution is None:
+            fails.append("duration_delta expected but no solver solution on the proposal")
+        else:
+            delta = solution.get("delta_minutes", 0)
+            sign = "negative" if delta < 0 else "positive" if delta > 0 else "zero"
+            if sign != expect["duration_delta"]:
+                fails.append(f"duration delta {delta} ({sign}), want {expect['duration_delta']}")
+
+    for bound, op, label in (
+        ("recommended_minutes_max", "le", "<="),
+        ("recommended_minutes_min", "ge", ">="),
+    ):
+        if bound in expect:
+            if solution is None:
+                fails.append(f"{bound} expected but no solver solution")
+            else:
+                mins = solution.get("recommended_minutes", 0)
+                ok = mins <= expect[bound] if op == "le" else mins >= expect[bound]
+                if not ok:
+                    fails.append(f"recommended_minutes {mins} not {label} {expect[bound]}")
+
+    if "deficit_score_sign" in expect:
+        score = proposal.get("deficit_score")
+        if score is None:
+            score = balance.get("deficit_score")
+        sign = "negative" if (score or 0) < 0 else "positive"
+        if sign != expect["deficit_score_sign"]:
+            fails.append(f"deficit_score {score} ({sign}), want {expect['deficit_score_sign']}")
+
+    if "forecast_available" in expect:
+        got = bool(balance.get("forecast_available"))
+        if got != bool(expect["forecast_available"]):
+            fails.append(f"forecast_available={got}, want {bool(expect['forecast_available'])}")
+
+    return fails
+
+
 def _keyword_checks(expect: dict[str, Any], answer: str) -> list[str]:
     fails: list[str] = []
     low = answer.lower()

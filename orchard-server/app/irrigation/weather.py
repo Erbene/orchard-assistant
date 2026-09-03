@@ -34,10 +34,25 @@ _HTTP_TIMEOUT = 15.0
 _points_cache: dict[str, dict] = {}
 _forecast_cache: dict[str, tuple[float, WeatherForecast]] = {}
 
+# In-process override for tests / the eval harness - when set, `forecast()`
+# returns it verbatim and never touches the network (mirrors hardware.py).
+_forecast_override: WeatherForecast | None = None
+
+
+def set_forecast(fc: WeatherForecast | None) -> None:
+    global _forecast_override
+    _forecast_override = fc
+
 
 def clear_cache() -> None:
     _points_cache.clear()
     _forecast_cache.clear()
+
+
+def reset() -> None:
+    """Drop caches and any test override."""
+    clear_cache()
+    set_forecast(None)
 
 
 def _key(settings: Settings) -> str:
@@ -114,6 +129,8 @@ async def _points(settings: Settings, client: httpx.AsyncClient) -> dict:
 
 async def forecast(settings: Settings) -> WeatherForecast:
     """Next ~7 days of quantitative precip + PoP + temps from NWS."""
+    if _forecast_override is not None:
+        return _forecast_override
     if settings.orchard_lat is None or settings.orchard_lon is None:
         return WeatherForecast(available=False, error="ORCHARD_LAT / ORCHARD_LON not set")
 

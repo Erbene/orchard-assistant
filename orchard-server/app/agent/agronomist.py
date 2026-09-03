@@ -94,6 +94,7 @@ def format_priority_context(
 class AgronomistResult(TypedDict):
     answer: str
     source_ids: list[int]
+    retrieved: list[FusedSource]  # provenance for offline grounding checks (eval only)
 
 
 @traced("agronomist.answer")
@@ -134,7 +135,11 @@ async def run_agronomist(
 
     source_ids = [g["source_id"] for g in groups]
     _log.info("agronomist.answered", sources=source_ids)
-    return {"answer": (msg.content or "").strip(), "source_ids": source_ids}
+    return {
+        "answer": (msg.content or "").strip(),
+        "source_ids": source_ids,
+        "retrieved": groups,
+    }
 
 
 # --------------------------------------------------------------------------

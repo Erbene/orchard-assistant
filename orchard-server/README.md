@@ -524,12 +524,19 @@ cd orchard-server
 ./.venv/Scripts/python -m eval --id chat-refuse-01-toxic-mix
 ```
 
-`eval/dataset.jsonl` (~36 scenarios) drives the real Orchestrator graph
-(routing / retrieval / Agronomist) and the real Foreman negotiation against a
-disposable `orchard_eval` DB. Grading = deterministic checks (route, tool +
-args, interrupt `step` sequence, escalation, "no DB write until an explicit
-completion") plus a `qwen2.5:7b` **AI judge** for free-text answer quality.
-Results land in `eval/results/` (git-ignored). Non-zero exit below the bar.
+`eval/dataset.jsonl` (~46 scenarios) drives the real Orchestrator graph
+(routing / retrieval / Agronomist), the real Foreman negotiation, and the real
+irrigation supervisor (`--only irrigation` — decision / HITL / solver duration
+for a seeded zone, with the stub moisture + NWS forecast pinned per scenario)
+against a disposable `orchard_eval` DB. Grading = deterministic checks (route,
+tool + args, interrupt `step` sequence, escalation, "no DB write until an
+explicit completion", irrigation action / HITL / duration bounds) plus a
+`qwen2.5:7b` **AI judge** for free-text answer quality. For the 5
+`chat-agronomy-*` rows, `eval/grounding.py` additionally checks whether the
+Agronomist's answer is grounded in what it retrieved (citation validity +
+per-claim `supported` / `general_knowledge` / `unsupported` verdicts) —
+advisory only, same as the judge. Results land in
+`eval/results/` (git-ignored). Non-zero exit below the bar.
 See [eval/README.md](eval/README.md).
 
 ### Model & prompt decisions — eval findings
@@ -580,3 +587,25 @@ and compare. Named snapshots referenced here are kept in
   costs ~20× latency. Kept 7B; `AGRONOMIST_MODEL` retained as a documented knob.
   Snapshots: `eval/baselines/2026-09-02-full-7b.json` (full 36-row 7B run),
   `eval/baselines/2026-09-02-agronomy-14b.json` (5 agronomy rows on 14B).
+- **2026-09-03 — irrigation eval channel added (baseline).** 10 `irrigation`
+  scenarios drive the real supervisor. **10/10 exact** (routing / HITL / solver
+  bounds all correct); **judge 3/10** — advisory, but the failures are real
+  plan-quality bugs, not judge noise, and become the fix list for the
+  supervisor-prompt / solver-tuning tracks:
+  1. **A skip still carries a "7-minute run".** `skip_schedule` decisions come
+     back with `recommended_minutes = 7` (the solver's floor) and summaries like
+     *"a 3-day skip and a 7-minute run"* — contradictory grower messaging. The
+     solver shouldn't be surfaced on a pure skip.
+  2. **`adjust_duration` runs the wrong way on a small deficit.**
+     `irr-04` (soil 21 %, target 27 %, deficit 6 — inside the tolerance band)
+     picked `adjust_duration` → *"7-minute run to save water"*, i.e. watering
+     *less* while the tree is *below* target. Should be `pass_no_action`.
+  3. **Emergency instead of balance in a mixed zone.** `irr-08` (mango +
+     jaboticaba) chose `start_zone_watering` for 53 min rather than a balanced
+     `adjust_duration`; the mango's wet-feet tolerance isn't weighed.
+  4. **Solver under-delivers at the top of its range.** `irr-05` / `irr-07`
+     emergency runs max out at ~43–53 min and still only reach ~16–18 % VWC
+     (target 27–30 %) — `estimated_gph` / `wetted_area_m2` defaults + the
+     penalty constants need a sweep (no re-tune since `dripper_count` was
+     dropped).
+  Snapshot: `eval/baselines/2026-09-03-irrigation-7b.json`.

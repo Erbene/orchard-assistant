@@ -33,6 +33,11 @@ def render(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
     by_cat: dict[str, list[str]] = defaultdict(list)
     exact_pass = judge_total = judge_pass = 0
 
+    # A2 groundedness (advisory, not in THRESHOLDS - see below).
+    claims_total = claims_ok = unsupported_claims = 0
+    fabricated_citations = 0
+    grounded_rows = 0
+
     for r in rows:
         st = _status(r)
         by_cat[r["category"]].append(st)
@@ -42,6 +47,14 @@ def render(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
             judge_total += 1
             if r["judge"] == "pass":
                 judge_pass += 1
+
+        g = r.get("grounding")
+        if g and "claims_total" in g:
+            grounded_rows += 1
+            claims_total += g["claims_total"]
+            claims_ok += g["supported"] + g["general_knowledge"]
+            unsupported_claims += g["unsupported"]
+            fabricated_citations += len(g.get("fabricated_citations") or [])
 
         detail = ""
         if r.get("error"):
@@ -63,11 +76,22 @@ def render(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         lines.append(f"  {cat:<24} {ok}/{len(sts)}")
 
     judge_ok = judge_rate >= THRESHOLDS["judge_rate"]
+    # groundedness_rate = (supported + general_knowledge) / claims_total, over
+    # the agronomy chat rows only (n=5 in the current dataset). Advisory only:
+    # like judge_rate, this is one local 7B model grading another's claims,
+    # over too few rows to gate a run on - a dip is a cue to read the
+    # per-claim detail in the saved JSON, not a failure signal on its own.
+    groundedness_rate = claims_ok / claims_total if claims_total else 1.0
     lines.append("")
     lines.append(f"exact checks : {exact_pass}/{n}  ({exact_rate:.0%})   bar {THRESHOLDS['exact_rate']:.0%}  (gate)")
     lines.append(
         f"judge        : {judge_pass}/{judge_total}  ({judge_rate:.0%})   ref {THRESHOLDS['judge_rate']:.0%}  "
         f"(advisory{'' if judge_ok else ' - below ref, read transcripts'})"
+    )
+    lines.append(
+        f"groundedness : {claims_ok}/{claims_total} claims  ({groundedness_rate:.0%}) over {grounded_rows} "
+        f"agronomy row(s)   unsupported={unsupported_claims}  fabricated_citations={fabricated_citations}  "
+        "(advisory - n too small + noisy local judge to gate)"
     )
 
     passed = exact_rate >= THRESHOLDS["exact_rate"]
@@ -82,6 +106,13 @@ def render(rows: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         "judge_pass": judge_pass,
         "judge_total": judge_total,
         "judge_rate": judge_rate,
+        # Advisory only - not in THRESHOLDS, does not affect `passed`.
+        "grounded_rows": grounded_rows,
+        "claims_total": claims_total,
+        "claims_ok": claims_ok,
+        "unsupported_claims": unsupported_claims,
+        "fabricated_citations": fabricated_citations,
+        "groundedness_rate": groundedness_rate,
         "passed": passed,
         "rows": rows,
     }

@@ -8,7 +8,7 @@ from typing import Any
 
 from app.config import Settings
 
-from . import graders, harness, judge
+from . import graders, grounding, harness, judge
 
 DATASET = Path(__file__).resolve().parent / "dataset.jsonl"
 
@@ -42,6 +42,7 @@ async def _run_row(settings: Settings, row: dict[str, Any]) -> dict[str, Any]:
         "exact_fails": [],
         "judge": None,
         "judge_reason": "",
+        "grounding": None,  # populated for agronomy chat rows only - see below
         "error": None,
     }
     try:
@@ -60,6 +61,32 @@ async def _run_row(settings: Settings, row: dict[str, Any]) -> dict[str, Any]:
             }
             reply_for_judge = result["answer"]
             user_msg = row["messages"][-1]["content"]
+
+            # A2 groundedness (advisory - see report.py): only agronomy turns
+            # retrieve anything to check claims against. Never let a grading
+            # failure here turn the row into an ERROR.
+            if result.get("route") == "agronomy" and result.get("retrieved") is not None:
+                try:
+                    out["grounding"] = await grounding.check_groundedness(
+                        settings, answer=result["answer"], retrieved=result["retrieved"]
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    out["grounding"] = {"error": str(exc)[:200]}
+        elif row["channel"] == "irrigation":
+            result = await harness.run_irrigation(settings, row)
+            out["exact_fails"] = graders.grade_irrigation(expect, result)
+            prop = result.get("proposal") or {}
+            sol = prop.get("solution") or {}
+            out["observed"] = {
+                "action": (prop.get("decision") or {}).get("action") or prop.get("action"),
+                "status": prop.get("status"),
+                "deficit_score": prop.get("deficit_score"),
+                "recommended_minutes": sol.get("recommended_minutes"),
+                "delta_minutes": sol.get("delta_minutes"),
+                "summary": (prop.get("summary") or "")[:400],
+            }
+            reply_for_judge = prop.get("summary") or ""
+            user_msg = row.get("note", row["id"])
         else:
             result = await harness.run_schedule(settings, row, task_ids)
             out["exact_fails"] = graders.grade_schedule(expect, result, task_ids)

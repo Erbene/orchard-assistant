@@ -37,7 +37,11 @@ def build_graph(
             sources=sources,
             settings=settings,
         )
-        return {"answer": result["answer"], "tool_calls": []}
+        return {
+            "answer": result["answer"],
+            "tool_calls": [],
+            "retrieved": result["retrieved"],
+        }
 
     async def _schedule_handoff(state: OrchestratorState) -> dict:
         return {
