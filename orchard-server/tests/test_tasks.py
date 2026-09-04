@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -116,6 +116,63 @@ def test_pending_queue_orders_by_priority_and_filters_by_date(orchard):
             scheduled_before=datetime.now(timezone.utc) + timedelta(days=7)
         )
         assert {t.action_type for t in windowed} == {"a", "b", "d"}
+
+    orchard(body)
+
+
+def test_inbox_rolls_expired_seasonal_task_to_next_valid_window(orchard):
+    async def body(c: Ctx):
+        tree_id = await _make_tree(c.trees)
+        today = date.today()
+        valid_month = 12 if today.month == 1 else today.month - 1
+        scheduled_year = today.year - 1 if today.month == 1 else today.year
+        scheduled = datetime(
+            scheduled_year, valid_month, 1, tzinfo=timezone.utc
+        )
+        next_year = today.year if valid_month > today.month else today.year + 1
+
+        template_id = (
+            await c.conn.execute(
+                text(
+                    f"""
+                    INSERT INTO task_templates
+                        (tree_id, name, category, interval_days,
+                         estimated_minutes, valid_months)
+                    VALUES
+                        (:tree_id, 'seasonal prune', 'prune', 365, 30,
+                         '[{valid_month}]'::jsonb)
+                    RETURNING id
+                    """
+                ),
+                {"tree_id": tree_id},
+            )
+        ).scalar_one()
+        task_id = (
+            await c.conn.execute(
+                text(
+                    """
+                    INSERT INTO task
+                        (tree_id, template_id, action_type, status,
+                         priority_score, scheduled_date, estimated_minutes)
+                    VALUES
+                        (:tree_id, :template_id, 'seasonal prune', 'pending',
+                         5.0, :scheduled, 30)
+                    RETURNING id
+                    """
+                ),
+                {
+                    "tree_id": tree_id,
+                    "template_id": template_id,
+                    "scheduled": scheduled,
+                },
+            )
+        ).scalar_one()
+
+        inbox = await c.tasks.inbox()
+
+        rolled = next(task for task in inbox if task.id == task_id)
+        assert rolled.scheduled_date.date() == date(next_year, valid_month, 1)
+        assert rolled.out_of_season is False
 
     orchard(body)
 

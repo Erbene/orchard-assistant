@@ -80,6 +80,13 @@ def _clamp_to_valid_months(candidate: date, valid_months: list[int] | None) -> d
     return candidate
 
 
+def next_valid_date(
+    on_or_after: date, valid_months: list[int] | None
+) -> date:
+    """Return the earliest valid calendar date on or after ``on_or_after``."""
+    return _clamp_to_valid_months(on_or_after, valid_months)
+
+
 def _add_months(d: date, months: int) -> date:
     y, m = d.year, d.month + months
     while m > 12:
@@ -150,7 +157,7 @@ def next_due(
     skipped = False
     reason: str | None = None
 
-    candidate = _clamp_to_valid_months(candidate, valid_months)
+    candidate = next_valid_date(candidate, valid_months)
 
     if (
         biological_anchor in BIOLOGICAL_ANCHORS
@@ -185,7 +192,7 @@ def next_due(
                     f"resume after event window"
                 )
                 candidate = earliest_resume
-                candidate = _clamp_to_valid_months(candidate, valid_months)
+                candidate = next_valid_date(candidate, valid_months)
 
     closes = compute_window_closes_on(candidate, valid_months)
     return ScheduleOutcome(

@@ -11,7 +11,12 @@ from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 
 from ..agent.schedule_rules import Completion, ready_on
-from ..agent.schedule_solver import compute_window_closes_on, months_from_tree, next_due
+from ..agent.schedule_solver import (
+    compute_window_closes_on,
+    months_from_tree,
+    next_due,
+    next_valid_date,
+)
 from ..repositories.executed_task_log_repository import ExecutedTaskLogRepository
 from ..repositories.task_repository import TaskRepository
 from ..repositories.task_template_repository import TaskTemplateRepository
@@ -100,14 +105,24 @@ class TaskService:
         rows = await self._tasks.list_pending(
             scheduled_before=scheduled_before.date() if scheduled_before else None
         )
+        rows = await self._roll_expired_seasonal_tasks(rows)
         rows = await self._heal_blocked_schedules(rows)
+        if scheduled_before is not None:
+            before = scheduled_before.date()
+            rows = [
+                row
+                for row in rows
+                if (scheduled := _as_date(row.get("scheduled_date"))) is None
+                or scheduled <= before
+            ]
         enriched = [_enrich_window_fields(row) for row in rows]
         return [TaskRead.model_validate(r) for r in enriched]
 
     async def inbox(self) -> list[InboxTaskRead]:
         """The schedule inbox: pending tasks + template/tree labels + amounts,
         priority-then-date ordered."""
-        rows = await self._heal_blocked_schedules(await self._tasks.inbox())
+        rows = await self._roll_expired_seasonal_tasks(await self._tasks.inbox())
+        rows = await self._heal_blocked_schedules(rows)
         rows = [_enrich_window_fields(row) for row in rows]
         rows.sort(key=lambda r: r.get("out_of_season", False))
         return [InboxTaskRead.model_validate(r) for r in rows]
@@ -407,7 +422,40 @@ class TaskService:
                     ready, datetime.min.time(), tzinfo=timezone.utc
                 )
                 updated = await self._tasks.update(row["id"], {"scheduled_date": new_dt})
-                healed.append(updated if updated is not None else {**row, "scheduled_date": new_dt})
+                healed.append(
+                    {**row, **updated}
+                    if updated is not None
+                    else {**row, "scheduled_date": new_dt}
+                )
             else:
                 healed.append(row)
         return healed
+
+    async def _roll_expired_seasonal_tasks(
+        self, rows: list[dict], *, today: date | None = None
+    ) -> list[dict]:
+        """Move an open task whose seasonal window closed to its next valid date."""
+        today = today or date.today()
+        rolled: list[dict] = []
+        for row in rows:
+            enriched = _enrich_window_fields(row, today=today)
+            if not enriched["out_of_season"]:
+                rolled.append(row)
+                continue
+
+            valid_months = row.get("template_valid_months") or []
+            if isinstance(valid_months, str):
+                valid_months = json.loads(valid_months)
+            next_date = next_valid_date(today, valid_months)
+            new_dt = datetime.combine(
+                next_date, datetime.min.time(), tzinfo=timezone.utc
+            )
+            updated = await self._tasks.update(
+                row["id"], {"scheduled_date": new_dt}
+            )
+            rolled.append(
+                {**row, **updated}
+                if updated is not None
+                else {**row, "scheduled_date": new_dt}
+            )
+        return rolled
