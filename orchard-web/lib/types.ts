@@ -238,6 +238,22 @@ export interface InboxTask extends TaskRead {
   window_closes_on: string | null;
 }
 
+export interface ExecutedTask {
+  id: number;
+  tree_id: number;
+  tree_species: string;
+  tree_variety: string;
+  template_id: number | null;
+  task_id: number | null;
+  action_type: string;
+  category: string | null;
+  outcome: "completed" | "skipped";
+  scheduled_date: string | null;
+  executed_at: string;
+  estimated_minutes: number | null;
+  required_resources: string[];
+}
+
 // -- Irrigation workflow (Phase 3) -------------------------------------
 
 export interface ZoneConfig {

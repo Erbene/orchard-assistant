@@ -5,6 +5,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  History,
   Loader2,
   SkipForward,
 } from "lucide-react";
@@ -20,22 +21,38 @@ import { TimeStep } from "@/components/schedule/time-step";
 import { ResourceStep } from "@/components/schedule/resource-step";
 import { ScheduleList } from "@/components/schedule/schedule-list";
 import { ApiError, scheduleApi, tasksApi } from "@/lib/api";
-import type { InboxTask, ScheduleState } from "@/lib/types";
+import type { ExecutedTask, InboxTask, ScheduleState } from "@/lib/types";
 
 export default function SchedulePage() {
   const toast = useToast();
+  const [tab, setTab] = React.useState<"inbox" | "history">("inbox");
   const [tasks, setTasks] = React.useState<InboxTask[] | null>(null);
+  const [history, setHistory] = React.useState<ExecutedTask[] | null>(null);
   const [planOpen, setPlanOpen] = React.useState(false);
   const [pendingId, setPendingId] = React.useState<number | null>(null);
 
-  const load = React.useCallback(() => {
+  const loadInbox = React.useCallback(() => {
     tasksApi
       .list()
       .then(setTasks)
       .catch(() => setTasks([]));
   }, []);
 
-  React.useEffect(() => load(), [load]);
+  const loadHistory = React.useCallback(() => {
+    tasksApi
+      .history()
+      .then(setHistory)
+      .catch(() => setHistory([]));
+  }, []);
+
+  const load = React.useCallback(() => {
+    loadInbox();
+    loadHistory();
+  }, [loadInbox, loadHistory]);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
 
   async function act(id: number, fn: () => Promise<unknown>, verb: string) {
     setPendingId(id);
@@ -71,9 +88,22 @@ export default function SchedulePage() {
         </Button>
       </header>
 
+      <div className="border-b px-6">
+        <div className="flex gap-1">
+          <TabButton active={tab === "inbox"} onClick={() => setTab("inbox")}>
+            Inbox
+          </TabButton>
+          <TabButton active={tab === "history"} onClick={() => setTab("history")}>
+            History
+          </TabButton>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl">
-          {tasks === null ? (
+          {tab === "history" ? (
+            <HistoryPanel rows={history} />
+          ) : tasks === null ? (
             <div className="flex justify-center py-16">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
@@ -106,6 +136,73 @@ export default function SchedulePage() {
         onCompleted={load}
       />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "flex items-center border-b-2 px-3 py-2.5 text-sm font-medium transition-colors " +
+        (active
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground")
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function HistoryPanel({ rows }: { rows: ExecutedTask[] | null }) {
+  if (rows === null) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed py-16 text-center text-sm text-muted-foreground">
+        No completed work recorded yet.
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {rows.map((row) => (
+        <li key={row.id} className="rounded-lg border p-3">
+          <div className="flex items-center gap-2">
+            <History className="size-3.5 shrink-0 text-muted-foreground" />
+            {row.category && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
+                {row.category}
+              </span>
+            )}
+            <span className="truncate text-sm font-medium">{row.action_type}</span>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {new Date(row.executed_at).toLocaleDateString()}
+            {" · "}
+            {row.tree_species} · {row.tree_variety}
+            {row.estimated_minutes ? ` · ~${row.estimated_minutes} min` : ""}
+          </p>
+        </li>
+      ))}
+    </ul>
   );
 }
 

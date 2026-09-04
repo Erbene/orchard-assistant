@@ -11,6 +11,7 @@ import type {
   CarePlan,
   DemoApplyResult,
   DemoCatalog,
+  ExecutedTask,
   InboxTask,
   IrrigationOverview,
   SupervisorConfig,
@@ -286,6 +287,20 @@ export const irrigationApi = {
 /** The schedule inbox: generated tasks, and closing them out. */
 export const tasksApi = {
   list: () => apiClient.get<InboxTask[]>(`${API_PREFIX}/tasks`),
+  history: (params?: {
+    tree_id?: number;
+    outcome?: "completed" | "skipped";
+    limit?: number;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.tree_id != null) q.set("tree_id", String(params.tree_id));
+    if (params?.outcome) q.set("outcome", params.outcome);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return apiClient.get<ExecutedTask[]>(
+      `${API_PREFIX}/tasks/history${qs ? `?${qs}` : ""}`,
+    );
+  },
   complete: (id: number) =>
     apiClient.post<TaskRead>(`${API_PREFIX}/tasks/${id}/complete`),
   skip: (id: number) => apiClient.post<TaskRead>(`${API_PREFIX}/tasks/${id}/skip`),

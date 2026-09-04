@@ -29,6 +29,7 @@ from .repositories.irrigation_proposal_repository import IrrigationProposalRepos
 from .repositories.moisture_sensor_repository import MoistureSensorRepository
 from .repositories.rainfall_forecast_repository import RainfallForecastRepository
 from .repositories.source_repository import SourceRepository
+from .repositories.executed_task_log_repository import ExecutedTaskLogRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.task_template_repository import TaskTemplateRepository
 from .repositories.tree_repository import TreeRepository
@@ -64,6 +65,12 @@ async def get_connection(
 
 def get_tree_repository(conn: AsyncConnection = Depends(get_connection)) -> TreeRepository:
     return TreeRepository(conn)
+
+
+def get_executed_task_log_repository(
+    conn: AsyncConnection = Depends(get_connection),
+) -> ExecutedTaskLogRepository:
+    return ExecutedTaskLogRepository(conn)
 
 
 def get_task_repository(conn: AsyncConnection = Depends(get_connection)) -> TaskRepository:
@@ -133,8 +140,9 @@ def get_task_service(
     tasks: TaskRepository = Depends(get_task_repository),
     trees: TreeRepository = Depends(get_tree_repository),
     templates: TaskTemplateRepository = Depends(get_task_template_repository),
+    log: ExecutedTaskLogRepository = Depends(get_executed_task_log_repository),
 ) -> TaskService:
-    return TaskService(tasks, trees, templates)
+    return TaskService(tasks, trees, templates, log)
 
 
 async def get_foreman_service(

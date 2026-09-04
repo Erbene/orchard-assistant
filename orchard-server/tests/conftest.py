@@ -40,7 +40,7 @@ TEST_COLLECTION = "orchard_knowledge_test"
 
 _INIT_SQL = Path(__file__).resolve().parent.parent / "docker" / "postgres" / "init.sql"
 _TABLES = (
-    "source_chunks", "tree_sources", "task", "task_templates",
+    "source_chunks", "tree_sources", "executed_task_log", "task", "task_templates",
     "moisture_sensor", "rainfall_forecast_log",
     "irrigation_zone_config", "irrigation_proposal", "irrigation_config",
     "sources", "tree",

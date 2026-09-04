@@ -12,10 +12,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from ..agent.schedule_rules import Completion, ready_on
 from ..agent.schedule_solver import compute_window_closes_on, months_from_tree, next_due
+from ..repositories.executed_task_log_repository import ExecutedTaskLogRepository
 from ..repositories.task_repository import TaskRepository
 from ..repositories.task_template_repository import TaskTemplateRepository
 from ..repositories.tree_repository import TreeRepository
 from ..schemas.task import (
+    ExecutedTaskRead,
     InboxTaskRead,
     TaskBaselineItem,
     TaskCreate,
@@ -69,10 +71,12 @@ class TaskService:
         tasks: TaskRepository,
         trees: TreeRepository,
         templates: TaskTemplateRepository | None = None,
+        log: ExecutedTaskLogRepository | None = None,
     ) -> None:
         self._tasks = tasks
         self._trees = trees
         self._templates = templates
+        self._log = log
 
     # -- reads --------------------------------------------------------
 
@@ -107,6 +111,22 @@ class TaskService:
         rows = [_enrich_window_fields(row) for row in rows]
         rows.sort(key=lambda r: r.get("out_of_season", False))
         return [InboxTaskRead.model_validate(r) for r in rows]
+
+    async def list_history(
+        self,
+        *,
+        tree_id: int | None = None,
+        outcome: str | None = None,
+        limit: int = 100,
+    ) -> list[ExecutedTaskRead]:
+        """Grower-facing executed work log. Default outcome is ``completed`` only."""
+        if self._log is None:
+            return []
+        effective_outcome = outcome if outcome is not None else "completed"
+        rows = await self._log.list_history(
+            tree_id=tree_id, outcome=effective_outcome, limit=limit
+        )
+        return [ExecutedTaskRead.model_validate(r) for r in rows]
 
     async def recent_completions_for_scheduling(self) -> list[dict]:
         """Completed care-plan tasks within 90 days, for cross-task block rules."""
@@ -194,13 +214,33 @@ class TaskService:
             patch["completed_at"] = _now()
         closed = TaskRead.model_validate(await self._tasks.update(task_id, patch))
 
+        template = None
+        if closed.template_id and self._templates is not None:
+            template = await self._templates.get(closed.template_id)
+
+        if self._log is not None:
+            executed_at = (
+                closed.completed_at if status == "completed" else _now()
+            )
+            await self._log.insert(
+                {
+                    "tree_id": closed.tree_id,
+                    "template_id": closed.template_id,
+                    "task_id": closed.id,
+                    "action_type": closed.action_type,
+                    "category": template["category"] if template else None,
+                    "outcome": status,
+                    "scheduled_date": closed.scheduled_date,
+                    "executed_at": executed_at,
+                    "estimated_minutes": closed.estimated_minutes,
+                    "required_resources": closed.required_resources,
+                }
+            )
+
         if status == "completed":
             after = _as_date(closed.completed_at) or date.today()
         else:
             after = date.today()
-        template = None
-        if closed.template_id and self._templates is not None:
-            template = await self._templates.get(closed.template_id)
 
         if template is not None:
             tree = await self._trees.get(closed.tree_id) or {}

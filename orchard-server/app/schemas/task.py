@@ -118,3 +118,26 @@ class InboxTaskRead(TaskRead):
     tree_variety: str
     window_closes_on: date | None = None
     out_of_season: bool = False
+
+
+ExecutedOutcome = Literal["completed", "skipped"]
+
+
+class ExecutedTaskRead(BaseModel):
+    """One row from the executed-task log (grower-facing work history)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    tree_id: int
+    tree_species: str
+    tree_variety: str
+    template_id: int | None = None
+    task_id: int | None = None
+    action_type: str
+    category: str | None = None
+    outcome: ExecutedOutcome
+    scheduled_date: datetime | None = None
+    executed_at: datetime
+    estimated_minutes: int | None = None
+    required_resources: list[str] = Field(default_factory=list)

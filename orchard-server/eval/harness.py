@@ -107,7 +107,7 @@ async def provision() -> None:
 
 
 _RESET_TABLES = (
-    "source_chunks", "tree_sources", "task", "task_templates",
+    "source_chunks", "tree_sources", "executed_task_log", "task", "task_templates",
     "moisture_sensor", "rainfall_forecast_log",
     "irrigation_zone_config", "irrigation_proposal", "irrigation_config",
     "sources", "tree",
