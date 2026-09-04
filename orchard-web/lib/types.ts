@@ -304,6 +304,70 @@ export interface DemoApplyResult {
   message: string;
 }
 
+export interface SensorPinRead {
+  sensor_id: string;
+  label: string | null;
+  vwc_pct: number;
+  overridden: boolean;
+  source: string;
+}
+
+export interface SensorTreeRead {
+  tree_id: number;
+  species: string;
+  variety: string;
+  growth_stage: string;
+  target_vwc: number;
+  current_vwc: number | null;
+  moisture_gap: number;
+  deficit_score: number;
+  moisture_resolved_via: string;
+  notes: string[];
+  sensors: SensorPinRead[];
+}
+
+export interface SensorZoneRead {
+  zone_id: string;
+  last_watered_date: string | null;
+  last_watered_source: "rachio" | "demo" | "none" | string;
+  deficit_score: number;
+  baseline_minutes: number;
+  trees: SensorTreeRead[];
+}
+
+export interface SensorSnapshot {
+  demo_enabled: boolean;
+  for_date: string;
+  rain_24h_mm: number;
+  rain_overridden: boolean;
+  rain_source: string;
+  forecast_rain_24h_mm: number;
+  forecast_available: boolean;
+  forecast_overridden: boolean;
+  forecast_source: string;
+  forecast_error: string | null;
+  active_scenario_id: string | null;
+  pins_active: boolean;
+  zones: SensorZoneRead[];
+}
+
+export interface SensorOverridesIn {
+  rain_24h_mm?: number;
+  forecast_rain_24h_mm?: number;
+  for_date?: string;
+  clear?: string[];
+  moisture?: Array<{
+    tree_id?: number;
+    sensor_id?: string;
+    vwc_pct?: number;
+    clear?: boolean;
+  }>;
+  last_watered?: Array<{
+    zone_id: string;
+    last_watered_date: string | null;
+  }>;
+}
+
 export interface SupervisorDecision {
   action: IrrigationActionType;
   days: number;

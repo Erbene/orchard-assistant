@@ -36,45 +36,110 @@ Deep API docs, agent prompts, and eval log: **[orchard-server/README.md](orchard
 
 ---
 
-## Architecture
+## Workflow architecture
+
+Second line is the owner: **agent** (green), **deterministic** Python (gray), or **grower** (gold). Data sources are unlabeled.
+
+### 1. Orchestrator — grounded chat
 
 ```mermaid
-flowchart LR
-  subgraph inputs [External inputs]
-    NWS[NWS forecast]
-    Rachio[Rachio zones + schedule]
-    Ollama[Ollama 7B]
-  end
+flowchart TD
+  A["Question in /assistant<br/>grower"] --> B["classify<br/>Orchestrator agent"]
 
-  UI[Next.js UI<br/>orchard-web :3000]
+  B -->|agronomy| C["agronomist<br/>Agronomist agent"]
+  C --> D["Retrieve tree-linked chunks<br/>deterministic"]
+  D --> E["Rank by priority_order<br/>deterministic"]
+  E --> F["Cited answer<br/>Agronomist agent"]
 
-  subgraph api [FastAPI orchard-server :8000]
-    Orch[Orchestrator graph]
-    Fore[Foreman graph]
-    Irr[Irrigation Supervisor graph]
-  end
+  B -->|schedule| G["Handoff to /schedule<br/>deterministic"]
+  B -->|complete| H["Mark task complete<br/>deterministic"]
+  B -->|refuse or smalltalk| I["Classifier reply<br/>Orchestrator agent"]
 
-  Chroma[(Chroma RAG)]
-  PG[(Postgres + pgvector)]
-  HITL{Grower approval}
-  DryRun[Dry-run result]
-  Zones[/zones manual water]
+  F --> J["Stream response to the UI"]
+  G --> J
+  H --> J
+  I --> J
 
-  UI --> api
-  Ollama --> Orch & Fore & Irr
-  NWS --> Irr
-  Rachio --> Irr
-
-  Orch --> Chroma
-  Fore --> PG
-  Irr --> PG
-  Irr --> HITL --> DryRun
-  Zones -->|real write; bypasses HITL| Rachio
+  classDef agent fill:#e7f2ea,stroke:#3d6b4f,color:#1a2e22
+  classDef det fill:#f3f4f6,stroke:#9ca3af,color:#374151
+  classDef human fill:#fff7e0,stroke:#c4a035,color:#5c4a12
+  class B,C,F,I agent
+  class D,E,G,H det
+  class A human
 ```
 
-**Orchestrator** — one LLM classify call per turn; agronomy path retrieves from Chroma and cites linked sources.
-**Foreman** — deterministic escalation, biological-date blocks, and knapsack packing in Python; optional LLM narration.
-**Irrigation Supervisor** — water-balance deficit scoring and ToT beam-search duration solver in Python; LLM writes grower-facing prose; graph pauses at HITL before any Rachio write (currently `dry_run`).
+Every turn makes one classification call. Only the agronomy branch adds retrieval and a second LLM call; scheduling is handed to the Foreman rather than performed in chat.
+
+### 2. Foreman — JIT labor planning
+
+```mermaid
+flowchart TD
+  A["Open /schedule<br/>grower"] --> B["Load pending tasks<br/>deterministic"]
+  B --> C{"time_check<br/>deterministic"}
+  C -->|no: interrupt| D["Grower supplies time budget<br/>grower"]
+  D --> E["propose<br/>deterministic"]
+  C -->|yes| E
+
+  E --> E1["Escalate urgent tasks<br/>deterministic"]
+  E1 --> E2["Apply biological-date blocks<br/>deterministic"]
+  E2 --> E3["Greedy knapsack pack<br/>deterministic"]
+  E3 --> F{"resource_check<br/>deterministic"}
+
+  F -->|interrupt| G["Grower confirms tools<br/>grower"]
+  G --> H["finalize / refit<br/>deterministic"]
+  F -->|nothing required| H
+  H --> I["narrate<br/>Foreman agent"]
+  I --> J["Review proposed session<br/>grower"]
+  J -->|complete or report| K["Write task outcomes<br/>deterministic"]
+
+  classDef agent fill:#e7f2ea,stroke:#3d6b4f,color:#1a2e22
+  classDef det fill:#f3f4f6,stroke:#9ca3af,color:#374151
+  classDef human fill:#fff7e0,stroke:#c4a035,color:#5c4a12
+  class I agent
+  class B,C,E,E1,E2,E3,F,H,K det
+  class A,D,G,J human
+```
+
+Escalation, date rules, packing, and refitting are deterministic Python. The checkpointed graph can pause for time and tool answers; planning itself does not modify task records. The Foreman agent only writes the session summary (template fallback if Ollama is down).
+
+### 3. Irrigation Supervisor — proposal and approval
+
+```mermaid
+flowchart TD
+  A["Run supervision for a zone<br/>grower"] --> B["Build zone state<br/>deterministic"]
+  N["NWS rain forecast"] --> B
+  M["Soil-moisture reading"] --> B
+  P["Trees, targets, zone config"] --> B
+  R["Baseline schedule / Rachio"] --> B
+
+  B --> C["Water-balance deficit<br/>deterministic"]
+  C --> D["deliberate<br/>Supervisor agent"]
+  D --> E["contention ToT duration<br/>deterministic"]
+  E --> F["summarize<br/>Supervisor agent"]
+  F --> G["Pause before execute<br/>grower"]
+
+  G --> H["Build proposal<br/>deterministic"]
+  L["Rachio lastWateredDate"] --> I
+  H --> I{"Two-day spacing guard<br/>deterministic"}
+  I -->|recent watering + watering action| J["Rewrite as one-day skip<br/>deterministic"]
+  I -->|otherwise| K["Keep proposed action<br/>deterministic"]
+  J --> Q["Save to approval queue<br/>deterministic"]
+  K --> Q
+
+  Q -->|grower rejects| X["No action<br/>grower"]
+  Q -->|grower approves| Y["Resume execute_rachio_action<br/>deterministic"]
+  Q -->|configured auto-approve skip| Y
+  Y --> Z["Dispatch skip / adjust / start<br/>deterministic"]
+
+  classDef agent fill:#e7f2ea,stroke:#3d6b4f,color:#1a2e22
+  classDef det fill:#f3f4f6,stroke:#9ca3af,color:#374151
+  classDef human fill:#fff7e0,stroke:#c4a035,color:#5c4a12
+  class D,F agent
+  class B,C,E,H,I,J,K,Q,Y,Z det
+  class A,G,X human
+```
+
+The solver evaluates every zone, including mixed-species contention. Every action pauses before execution; approved supervisor actions are currently `dry_run`. The separate `/zones` manual-water control is a live Rachio write and bypasses this workflow.
 
 ---
 
@@ -106,7 +171,7 @@ ollama pull qwen2.5:7b-instruct
 
 cd ..
 .\dev.ps1                       # bare-metal app + containerised Postgres/Chroma
-.\dev.ps1 -Demo                 # optional: irrigation demo scenarios on /irrigation
+.\dev.ps1 -Demo                 # optional: irrigation demo scenarios on /irrigation/sensors
 ```
 
 **Full stack in Docker** (Postgres, Chroma, backend, frontend):
@@ -127,9 +192,9 @@ After `.\dev.ps1 -Demo` (or `ORCHARD_DEMO=true`):
 
 1. **`/assistant`** — Ask a species-specific care question with linked sources; confirm citations. Ask to plan weekend work; follow the schedule handoff redirect.
 2. **`/schedule`** — Enter available minutes and tools; walk the Foreman interrupts; inspect the packed plan before completing.
-3. **`/irrigation`** — Select **Mixed zone: mango vs. a thirsty neighbour** (`mixed-zone-tot`), click **Apply** (pins stub readings only — selecting a radio does **not** run the graph), then click **Run Supervision Task**. Inspect the HITL queue (duration change, per-species projected VWC, Approve/Reject). With LangSmith enabled, open the `irrigation.tot_solver` trace to see beam-search candidates.
+3. **`/irrigation/sensors`** — Pin stub readings (moisture, rain, QPF, last-watered) for a known outcome, or apply a preset via API (e.g. `POST /api/v1/irrigation/demo/mixed-zone-tot/apply` for **Mixed zone: mango vs. a thirsty neighbour**). Then click **Run Supervision Task** on the irrigation header. Inspect the HITL queue at **`/irrigation`** (duration change, per-species projected VWC, Approve/Reject). With LangSmith enabled, open the `irrigation.tot_solver` trace to see beam-search candidates.
 
-Other demo presets: `rain-skip` (skip schedule after heavy QPF), `drought-emergency` (emergency run proposal).
+Other demo presets (API): `rain-skip` (skip schedule after heavy QPF), `drought-emergency` (emergency run proposal).
 
 ---
 
@@ -139,7 +204,9 @@ Other demo presets: `rain-skip` (skip schedule after heavy QPF), `drought-emerge
 | ----- | ------- |
 | `/assistant` | Grounded chat (Orchestrator + Ollama SSE) |
 | `/schedule` | Task inbox + Foreman JIT dialog |
-| `/irrigation` | Supervisor HITL queue + schedule/settings + Run Supervision Task |
+| `/irrigation` | Supervisor HITL approval queue |
+| `/irrigation/sensors` | Sensor readings; demo moisture/rain pins when `ORCHARD_DEMO=true` |
+| `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees`, `/trees/[id]` | Tree CRUD, Care Plan tab, linked sources |
 | `/zones` | Rachio zones (read-only list; **manual water is a real Rachio write**) |
 | `/sources` | Knowledge-base upload, compose, and tree linking |

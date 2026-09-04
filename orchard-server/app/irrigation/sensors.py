@@ -98,3 +98,26 @@ class MoistureSensorService:
             mean_vwc_pct=mean,
             resolved_via=resolved,
         )
+
+    async def ensure_for_tree(
+        self, tree_id: int, *, sensor_id: str | None = None, label: str = "Demo pin"
+    ) -> MoistureSensorRead:
+        """Return the tree's first sensor, creating a demo pin if it has none."""
+        existing = await self.sensors_for_tree(tree_id)
+        if existing:
+            return existing[0]
+        tree = await self._trees.get(tree_id)
+        if tree is None:
+            raise NotFoundError(f"tree {tree_id} not found")
+        sid = sensor_id or f"demo-{tree_id}"
+        try:
+            return await self.create(
+                MoistureSensorCreate(
+                    id=sid,
+                    label=label,
+                    tree_id=tree_id,
+                    zone_id=tree.get("zone_id"),
+                )
+            )
+        except ConflictError:
+            return await self.get(sid)

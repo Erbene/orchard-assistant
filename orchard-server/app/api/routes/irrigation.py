@@ -6,8 +6,11 @@
     POST /irrigation/supervisor/run                 -> run the deliberation flow now
     GET  /irrigation/proposals?status=pending       -> the HITL approval queue
     POST /irrigation/proposals/{thread_id}/approve  -> resume the graph past the interrupt
+    GET  /irrigation/sensors                        -> current supervisor inputs (VWC, rain, QPF)
+    PUT  /irrigation/sensors/overrides              -> demo-only pin of those inputs
     GET  /irrigation/demo                           -> demo catalog (ORCHARD_DEMO)
     POST /irrigation/demo/{id}/apply                -> pin stub readings for a scenario
+    POST /irrigation/demo/reset                     -> clear demo pins
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ from ...dependencies import (
     get_irrigation_config_service,
     get_irrigation_supervisor_service,
     get_moisture_sensor_service,
+    get_sensor_board_service,
     get_settings_dep,
     get_tree_repository,
 )
@@ -28,6 +32,8 @@ from ...schemas.irrigation import (
     DemoApplyResult,
     DemoCatalog,
     IrrigationOverview,
+    SensorOverridesIn,
+    SensorSnapshot,
     SupervisorConfig,
     SupervisorConfigUpdate,
     SupervisorProposal,
@@ -40,6 +46,7 @@ from ...services.irrigation_service import (
     IrrigationConfigService,
     IrrigationSupervisorService,
 )
+from ...services.sensor_board import SensorBoardService
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/irrigation", tags=["irrigation"])
@@ -107,6 +114,23 @@ async def reject_proposal(
     return await svc.reject(thread_id)
 
 
+@router.get("/sensors", response_model=SensorSnapshot)
+async def sensor_snapshot(
+    board: SensorBoardService = Depends(get_sensor_board_service),
+):
+    return await board.snapshot()
+
+
+@router.put("/sensors/overrides", response_model=SensorSnapshot)
+async def apply_sensor_overrides(
+    payload: SensorOverridesIn,
+    settings: Settings = Depends(get_settings_dep),
+    board: SensorBoardService = Depends(get_sensor_board_service),
+):
+    _require_demo(settings)
+    return await board.apply_overrides(payload)
+
+
 def _require_demo(settings: Settings) -> None:
     if not settings.orchard_demo:
         raise NotFoundError("demo mode is off (set ORCHARD_DEMO=true)")
@@ -120,6 +144,16 @@ async def demo_catalog(settings: Settings = Depends(get_settings_dep)):
         active_scenario_id=demo.active_scenario_id(),
         scenarios=demo.catalog(),
     )
+
+
+@router.post("/demo/reset", response_model=SensorSnapshot)
+async def reset_demo_pins(
+    settings: Settings = Depends(get_settings_dep),
+    board: SensorBoardService = Depends(get_sensor_board_service),
+):
+    _require_demo(settings)
+    demo.reset()
+    return await board.snapshot()
 
 
 @router.post("/demo/{scenario_id}/apply", response_model=DemoApplyResult)

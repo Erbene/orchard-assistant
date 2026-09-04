@@ -42,6 +42,7 @@ from .services.irrigation_service import (
     IrrigationConfigService,
     IrrigationSupervisorService,
 )
+from .services.sensor_board import SensorBoardService
 from .services.rachio import RachioService, get_rachio_service
 from .services.source_service import SourceService
 from .services.water_balance import WaterBalanceService
@@ -212,6 +213,16 @@ def get_irrigation_proposal_repository(
     conn: AsyncConnection = Depends(get_connection),
 ) -> IrrigationProposalRepository:
     return IrrigationProposalRepository(conn)
+
+
+def get_sensor_board_service(
+    water: WaterBalanceService = Depends(get_water_balance_service),
+    trees: TreeRepository = Depends(get_tree_repository),
+    sensors: MoistureSensorService = Depends(get_moisture_sensor_service),
+    config: IrrigationConfigRepository = Depends(get_irrigation_config_repository),
+    settings: Settings = Depends(get_settings_dep),
+) -> SensorBoardService:
+    return SensorBoardService(water, trees, sensors, config, settings)
 
 
 def get_irrigation_config_service(

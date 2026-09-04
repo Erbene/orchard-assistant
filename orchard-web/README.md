@@ -7,7 +7,9 @@ sidebar links the main routes:
 | ----- | ---- |
 | `/assistant` (and `/`) | Grounded chat — SSE from the FastAPI Orchestrator + Ollama (not a stub). |
 | `/schedule` | Task inbox + Foreman JIT scheduling dialog (time budget → resources → plan). |
-| `/irrigation` | Supervisor HITL approval queue + schedule/settings; demo scenario radios when `ORCHARD_DEMO=true`. |
+| `/irrigation` | Supervisor HITL approval queue |
+| `/irrigation/sensors` | Sensor readings; demo moisture/rain/last-watered pins when `ORCHARD_DEMO=true`. |
+| `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees` | Trees CRUD data table — search, sort, paginate, row actions, modal form. |
 | `/trees/[id]` | Tree detail with **Care Plan** tab (month strip, baseline wizard, template editing). |
 | `/zones` | Rachio zones — read-only list from the live Rachio API; manual water triggers a real Rachio run (bypasses irrigation HITL). |
@@ -25,7 +27,10 @@ app/
   page.tsx                redirect → /assistant
   assistant/page.tsx      conversation rail · message list · composer
   schedule/page.tsx       task inbox · Foreman JIT wizard dialog
-  irrigation/page.tsx     HITL queue · schedule/settings · demo scenarios
+  irrigation/layout.tsx   shared header · sub-nav · Run Supervision Task
+  irrigation/page.tsx     HITL approval queue
+  irrigation/sensors/page.tsx  sensor readings · demo pins
+  irrigation/schedule/page.tsx  schedule & supervisor settings
   trees/page.tsx          <DataTable/> · create/edit <Dialog>
   trees/[id]/page.tsx     tree detail · Care Plan tab
   zones/page.tsx          Rachio zone cards · manual water dialog

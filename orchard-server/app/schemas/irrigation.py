@@ -281,6 +281,84 @@ class DemoApplyResult(BaseModel):
     message: str
 
 
+# -- sensor board (Irrigation Sensors tab) -----------------------------
+
+class SensorPinRead(BaseModel):
+    sensor_id: str
+    label: str | None = None
+    vwc_pct: float
+    overridden: bool = False
+    source: str = "stub"  # stub | override
+
+
+class SensorTreeRead(BaseModel):
+    tree_id: int
+    species: str = ""
+    variety: str = ""
+    growth_stage: str
+    target_vwc: float
+    current_vwc: float | None = None
+    moisture_gap: float = 0.0
+    deficit_score: float = 0.0
+    moisture_resolved_via: str = "none"
+    notes: list[str] = Field(default_factory=list)
+    sensors: list[SensorPinRead] = Field(default_factory=list)
+
+
+class SensorZoneRead(BaseModel):
+    zone_id: str
+    last_watered_date: date | None = None
+    last_watered_source: str = "none"  # rachio | demo | none
+    deficit_score: float = 0.0
+    baseline_minutes: int = 20
+    trees: list[SensorTreeRead] = Field(default_factory=list)
+
+
+class SensorSnapshot(BaseModel):
+    demo_enabled: bool = False
+    for_date: date
+    rain_24h_mm: float = 0.0
+    rain_overridden: bool = False
+    rain_source: str = "stub"
+    forecast_rain_24h_mm: float = 0.0
+    forecast_available: bool = True
+    forecast_overridden: bool = False
+    forecast_source: str = "nws"
+    forecast_error: str | None = None
+    active_scenario_id: str | None = None
+    pins_active: bool = False
+    zones: list[SensorZoneRead] = Field(default_factory=list)
+
+
+class MoistureOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tree_id: int | None = Field(default=None, gt=0)
+    sensor_id: str | None = None
+    vwc_pct: float | None = Field(default=None, ge=0, le=100)
+    clear: bool = False
+
+
+class LastWateredOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    zone_id: str = Field(min_length=1)
+    last_watered_date: date | None = None
+
+
+class SensorOverridesIn(BaseModel):
+    """Partial demo pins. Omitted fields are left unchanged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rain_24h_mm: float | None = Field(default=None, ge=0, le=500)
+    forecast_rain_24h_mm: float | None = Field(default=None, ge=0, le=500)
+    for_date: date | None = None
+    clear: list[str] = Field(default_factory=list)
+    moisture: list[MoistureOverride] = Field(default_factory=list)
+    last_watered: list[LastWateredOverride] = Field(default_factory=list)
+
+
 class SupervisorRunResult(BaseModel):
     ran_at: datetime
     for_date: date

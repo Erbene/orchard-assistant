@@ -55,9 +55,25 @@ def set_moisture(sensor_id: str, vwc_pct: float) -> None:
     _moisture_overrides[sensor_id] = float(vwc_pct)
 
 
+def clear_moisture(sensor_id: str) -> None:
+    _moisture_overrides.pop(sensor_id, None)
+
+
+def clear_all_moisture() -> None:
+    _moisture_overrides.clear()
+
+
+def moisture_is_overridden(sensor_id: str) -> bool:
+    return sensor_id in _moisture_overrides
+
+
 def set_rain_bucket_24h(mm: float | None) -> None:
     global _rain_override
     _rain_override = None if mm is None else float(mm)
+
+
+def rain_is_overridden() -> bool:
+    return _rain_override is not None
 
 
 def reset() -> None:
@@ -69,6 +85,10 @@ __all__ = [
     "get_moisture",
     "get_rain_bucket_24h",
     "set_moisture",
+    "clear_moisture",
+    "clear_all_moisture",
+    "moisture_is_overridden",
     "set_rain_bucket_24h",
+    "rain_is_overridden",
     "reset",
 ]

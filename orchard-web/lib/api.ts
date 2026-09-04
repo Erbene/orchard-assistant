@@ -14,6 +14,8 @@ import type {
   ExecutedTask,
   InboxTask,
   IrrigationOverview,
+  SensorOverridesIn,
+  SensorSnapshot,
   SupervisorConfig,
   SupervisorProposal,
   SupervisorRunResult,
@@ -282,6 +284,15 @@ export const irrigationApi = {
     apiClient.post<DemoApplyResult>(
       `${API_PREFIX}/irrigation/demo/${encodeURIComponent(id)}/apply`,
     ),
+  sensors: () =>
+    apiClient.get<SensorSnapshot>(`${API_PREFIX}/irrigation/sensors`),
+  applySensorOverrides: (patch: SensorOverridesIn) =>
+    apiClient.put<SensorSnapshot>(
+      `${API_PREFIX}/irrigation/sensors/overrides`,
+      patch,
+    ),
+  resetDemo: () =>
+    apiClient.post<SensorSnapshot>(`${API_PREFIX}/irrigation/demo/reset`),
 };
 
 /** The schedule inbox: generated tasks, and closing them out. */

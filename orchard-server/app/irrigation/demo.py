@@ -125,10 +125,32 @@ def overlay_last_watered(zone_id: str) -> date | None:
     return _log_last_watered.get(zone_id)
 
 
+def set_on_date(on_date: date | None) -> None:
+    global _on_date
+    _on_date = on_date
+
+
+def set_last_watered(zone_id: str, on_date: date | None) -> None:
+    if on_date is None:
+        _log_last_watered.pop(zone_id, None)
+    else:
+        _log_last_watered[zone_id] = on_date
+
+
+def clear_last_watered() -> None:
+    _log_last_watered.clear()
+
+
+def clear_scenario_id() -> None:
+    """Keep pins, but drop the named-preset label (custom board edits)."""
+    global _scenario_id
+    _scenario_id = None
+
+
 def reset() -> None:
     global _on_date, _scenario_id, _zone_ids
     hardware.reset()
-    weather.clear_cache()
+    weather.reset()
     _log_last_watered.clear()
     _on_date = None
     _scenario_id = None

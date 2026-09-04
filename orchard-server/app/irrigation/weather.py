@@ -44,6 +44,10 @@ def set_forecast(fc: WeatherForecast | None) -> None:
     _forecast_override = fc
 
 
+def forecast_is_overridden() -> bool:
+    return _forecast_override is not None
+
+
 def clear_cache() -> None:
     _points_cache.clear()
     _forecast_cache.clear()
