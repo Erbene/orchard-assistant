@@ -121,6 +121,7 @@ class TaskRepository:
         sql = (
             "SELECT t.*, tt.valid_months AS template_valid_months,"
             " tt.category AS template_category,"
+            " tt.blocks AS template_blocks,"
             " tr.species AS tree_species, tr.variety AS tree_variety,"
             f" {_LAST_COMPLETED_SQL} AS last_completed"
             " FROM task t"
@@ -144,6 +145,11 @@ class TaskRepository:
             row["template_valid_months"] = (
                 json.loads(vm) if isinstance(vm, str) else (vm or [])
             )
+            blocks = row.get("template_blocks")
+            if isinstance(blocks, str):
+                row["template_blocks"] = json.loads(blocks)
+            elif blocks is None:
+                row["template_blocks"] = []
             rows.append(row)
         return rows
 

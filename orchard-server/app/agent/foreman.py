@@ -4,7 +4,7 @@ A two-interrupt LangGraph negotiation:
 
     time_check --(interrupt: available_minutes)--> propose
     propose    --> resource_check --(interrupt: have_resources)--> finalize
-    finalize   --> narrate --> END
+    finalize   --> review --> narrate --> END
 
 The deterministic engine (``escalate`` / ``pack`` / ``resources_for`` /
 ``refit``) does the scheduling; a local Ollama model only writes the
@@ -31,7 +31,13 @@ from ..config import Settings, get_settings
 from ..core.logging import get_logger
 from .escalation import Escalation, escalate
 from .ollama import chat_model
-from .schedule_rules import Completion, apply_blocks
+from .agronomist import review_session_adversaries
+from .schedule_rules import (
+    Completion,
+    apply_blocks,
+    apply_session_conflicts,
+    session_conflict_reason,
+)
 
 _log = get_logger("app.foreman")
 
@@ -40,11 +46,14 @@ Task = dict[str, Any]
 _DEFAULT_MINUTES = 30  # a task with no estimate still needs to be schedulable
 
 FOREMAN_SYSTEM_PROMPT = (
-    "You are the Orchard Foreman. You are given a JSON work plan the scheduler "
-    "already computed for today's session: the time budget, the tasks that fit, "
-    "the tasks that were dropped and why, and any overdue-risk escalations. "
-    "Write a short, practical briefing (3-6 sentences) the grower can act on: "
-    "what to do first, roughly how long it runs, what got left out. "
+    "Narrate the deterministic selection as an owner-facing work-session briefing. "
+    "You are given JSON the scheduler already computed: the time budget, the tasks "
+    "that fit, the tasks that were dropped and why (same-session conflicts, seasonal "
+    "blocks, missing tools, no time), and any overdue-risk escalations. "
+    "Do not invent extra work and do not second-guess the selection. "
+    "Write 3-6 practical sentences: what to do first, roughly how long it runs, "
+    "and why anything was left out - especially two feeds or sprays that cannot "
+    "share a session on the same tree. "
     "For EVERY escalation in the input, call it out explicitly by task id and "
     "by how many days overdue it is - these are time-critical. Plain ASCII "
     "text, no markdown headers, no emoji."
@@ -129,9 +138,12 @@ def refit(
     )
     for task in candidates:
         cost = _minutes(task)
-        if used + cost <= minutes:
-            kept.append(task)
-            used += cost
+        if used + cost > minutes:
+            continue
+        if any(session_conflict_reason(task, kept_task) for kept_task in kept):
+            continue
+        kept.append(task)
+        used += cost
     return _by_score(kept), dropped
 
 
@@ -176,13 +188,20 @@ def _narrate(
                     "id": t["id"],
                     "action_type": t["action_type"],
                     "tree_id": t.get("tree_id"),
+                    "category": t.get("template_category") or t.get("category"),
                     "minutes": _minutes(t),
                     "priority": round(t.get("_effective_score", t.get("priority_score", 0.0)), 1),
                 }
                 for t in state.get("proposed_tasks", [])
             ],
             "dropped": [
-                {"id": t["id"], "action_type": t["action_type"], "reason": t.get("_drop_reason")}
+                {
+                    "id": t["id"],
+                    "action_type": t["action_type"],
+                    "tree_id": t.get("tree_id"),
+                    "category": t.get("template_category") or t.get("category"),
+                    "reason": t.get("_drop_reason"),
+                }
                 for t in state.get("dropped_tasks", [])
             ],
             "escalations": state.get("escalations", []),
@@ -263,13 +282,23 @@ def _propose(state: ForemanState) -> dict:
     escalated, escalations = escalate(state.get("pending_tasks", []))
     completions = _completions_from_state(state.get("recent_completions", []))
     eligible, blocked = apply_blocks(escalated, completions, today=date.today())
-    proposed = pack(eligible, int(state["available_minutes"]))
+    blocked_ids = {t["id"] for t in blocked}
+    packed = pack(eligible, int(state["available_minutes"]))
+    proposed, conflicted = apply_session_conflicts(packed)
+    proposed, _ = refit(
+        eligible,
+        proposed,
+        [],
+        int(state["available_minutes"]),
+        blocked_ids=blocked_ids | {t["id"] for t in conflicted},
+    )
+    proposed, extra = apply_session_conflicts(proposed)
     return {
         "pending_tasks": escalated,
         "proposed_tasks": proposed,
         "blocked_tasks": blocked,
-        "blocked_task_ids": {t["id"] for t in blocked},
-        "dropped_tasks": blocked,
+        "blocked_task_ids": blocked_ids,
+        "dropped_tasks": blocked + conflicted + extra,
         "required_resources": resources_for(proposed),
         "escalations": escalations,
     }
@@ -286,15 +315,53 @@ def _resource_check(state: ForemanState) -> dict:
 def _finalize(state: ForemanState) -> dict:
     confirmed = {r.strip().lower() for r in state.get("confirmed_resources", [])}
     missing = [r for r in state.get("required_resources", []) if r.strip().lower() not in confirmed]
+    blocked = state.get("blocked_tasks") or []
+    blocked_ids = set(state.get("blocked_task_ids") or {t["id"] for t in blocked})
     final, dropped = refit(
         state.get("pending_tasks", []),
         state.get("proposed_tasks", []),
         missing,
         int(state["available_minutes"]),
-        blocked_ids=state.get("blocked_task_ids") or set(),
+        blocked_ids=blocked_ids,
     )
-    blocked = state.get("blocked_tasks") or []
-    return {"proposed_tasks": final, "dropped_tasks": blocked + dropped}
+    final, conflicted = apply_session_conflicts(final)
+    if conflicted:
+        final, more = refit(
+            state.get("pending_tasks", []),
+            final,
+            missing,
+            int(state["available_minutes"]),
+            blocked_ids=blocked_ids | {t["id"] for t in dropped} | {t["id"] for t in conflicted},
+        )
+        dropped = dropped + more
+    kept_ids = {t["id"] for t in final}
+    by_id: dict[int, Task] = {}
+    for task in list(state.get("dropped_tasks") or []) + blocked + dropped + conflicted:
+        tid = task.get("id")
+        if tid is None or tid in kept_ids:
+            continue
+        by_id[tid] = task
+    return {
+        "proposed_tasks": final,
+        "dropped_tasks": list(by_id.values()),
+        "required_resources": resources_for(final),
+    }
+
+
+def _review_plan(state: ForemanState, settings: Settings | None = None) -> dict:
+    """Ask the agronomist whether any remaining pair is adversarial."""
+    settings = settings or get_settings()
+    proposed = list(state.get("proposed_tasks") or [])
+    extra = review_session_adversaries(proposed, settings)
+    if not extra:
+        return {}
+    drop_ids = {t["id"] for t in extra}
+    kept = [t for t in proposed if t["id"] not in drop_ids]
+    return {
+        "proposed_tasks": kept,
+        "dropped_tasks": list(state.get("dropped_tasks") or []) + extra,
+        "required_resources": resources_for(kept),
+    }
 
 
 def _narrate_node(state: ForemanState, settings: Settings | None = None) -> dict:
@@ -310,11 +377,13 @@ def build_foreman_graph(checkpointer: Any, settings: Settings | None = None):
     g.add_node("propose", _propose)
     g.add_node("resource_check", _resource_check)
     g.add_node("finalize", _finalize)
+    g.add_node("review", lambda state: _review_plan(state, settings))
     g.add_node("narrate", lambda state: _narrate_node(state, settings))
     g.add_edge(START, "time_check")
     g.add_edge("time_check", "propose")
     g.add_edge("propose", "resource_check")
     g.add_edge("resource_check", "finalize")
-    g.add_edge("finalize", "narrate")
+    g.add_edge("finalize", "review")
+    g.add_edge("review", "narrate")
     g.add_edge("narrate", END)
     return g.compile(checkpointer=checkpointer)

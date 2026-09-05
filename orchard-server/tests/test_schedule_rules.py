@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.agent.schedule_rules import Completion, apply_blocks, ready_on
+from app.agent.schedule_rules import (
+    Completion,
+    apply_blocks,
+    apply_session_conflicts,
+    ready_on,
+    session_conflict_reason,
+)
 
 
 def _task(tid: int, *, tree_id: int = 1, category: str = "prune") -> dict:
@@ -94,3 +100,45 @@ def test_apply_blocks_splits_and_tags_reason():
     assert [t["id"] for t in eligible] == [2]
     assert len(blocked) == 1
     assert blocked[0]["_drop_reason"] and "prune blocked" in blocked[0]["_drop_reason"]
+
+
+def test_session_conflict_two_fertilize_same_tree():
+    nitrogen = _task(1, category="fertilize")
+    nitrogen["action_type"] = "Nitrogen feed"
+    nitrogen["_effective_score"] = 8.0
+    potassium = _task(2, category="fertilize")
+    potassium["action_type"] = "Potassium feed"
+    potassium["_effective_score"] = 6.0
+    kept, dropped = apply_session_conflicts([nitrogen, potassium])
+    assert [t["id"] for t in kept] == [1]
+    assert dropped[0]["id"] == 2
+    assert "one fertilize" in dropped[0]["_drop_reason"]
+    assert session_conflict_reason(potassium, nitrogen) is not None
+
+
+def test_session_conflict_allows_fertilize_on_different_trees():
+    a = {**_task(1, tree_id=1, category="fertilize"), "_effective_score": 8.0}
+    b = {**_task(2, tree_id=2, category="fertilize"), "_effective_score": 7.0}
+    kept, dropped = apply_session_conflicts([a, b])
+    assert {t["id"] for t in kept} == {1, 2}
+    assert dropped == []
+
+
+def test_session_conflict_prospective_blocks():
+    spray = _task(1, category="spray")
+    spray["action_type"] = "copper spray"
+    spray["template_blocks"] = [{"category": "prune", "min_gap_days": 7}]
+    spray["_effective_score"] = 9.0
+    prune = {**_task(2, category="prune"), "_effective_score": 4.0}
+    kept, dropped = apply_session_conflicts([spray, prune])
+    assert [t["id"] for t in kept] == [1]
+    assert dropped[0]["id"] == 2
+    assert "cannot run the same day" in dropped[0]["_drop_reason"]
+
+
+def test_session_conflict_two_prunes_ok():
+    a = {**_task(1, category="prune"), "action_type": "structural prune", "_effective_score": 5.0}
+    b = {**_task(2, category="prune"), "action_type": "sprout prune", "_effective_score": 4.0}
+    kept, dropped = apply_session_conflicts([a, b])
+    assert {t["id"] for t in kept} == {1, 2}
+    assert dropped == []

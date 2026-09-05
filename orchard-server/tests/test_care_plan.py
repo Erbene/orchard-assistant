@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.agent import care_plan as cp
-from app.agent.agronomist import _CarePlanModel, _PlanItem
+from app.agent.agronomist import _CarePlanModel, _PlanItem, rescale_template
 from app.core import db
 from app.dependencies import get_settings_dep
 from app.main import app
@@ -71,6 +71,139 @@ def test_scale_minutes_snap_to_five():
     for cat in cp.CATEGORIES:
         s = cp.scale(cat, "standard", height_m=3.0, spread_m=2.0)
         assert s.estimated_minutes % 5 == 0 and s.estimated_minutes >= 5
+
+
+def test_merge_duplicate_fertilize_products():
+    n = cp.scale("fertilize", "standard", height_m=3.0, spread_m=None)
+    k = cp.scale("fertilize", "light", height_m=3.0, spread_m=None)
+    prune = cp.scale("prune", "standard", height_m=3.0, spread_m=None)
+    templates = [
+        {
+            "name": "Nitrogen feed",
+            "category": "fertilize",
+            "rate_class": "standard",
+            "interval_days": 90,
+            "priority_score": 6.0,
+            "resource_plan": [r.as_dict() for r in n.resource_plan],
+            "required_resources": n.required_resources,
+            "blocks": [],
+            "valid_months": [3, 4, 5],
+            "baseline_question": "When did you last fertilize?",
+        },
+        {
+            "name": "Potassium feed",
+            "category": "fertilize",
+            "rate_class": "light",
+            "interval_days": 60,
+            "priority_score": 8.0,
+            "resource_plan": [r.as_dict() for r in k.resource_plan],
+            "required_resources": k.required_resources,
+            "blocks": [{"category": "prune", "min_gap_days": 7}],
+            "valid_months": [6],
+        },
+        {
+            "name": "Structural prune",
+            "category": "prune",
+            "rate_class": "standard",
+            "interval_days": 365,
+            "priority_score": 4.0,
+            "resource_plan": [r.as_dict() for r in prune.resource_plan],
+            "required_resources": prune.required_resources,
+            "blocks": [],
+            "valid_months": [],
+        },
+    ]
+    merged = cp.merge_duplicate_product_templates(templates)
+    assert len(merged) == 2
+    feed = next(t for t in merged if t["category"] == "fertilize")
+    assert "Nitrogen feed" in feed["name"] and "Potassium feed" in feed["name"]
+    assert feed["priority_score"] == 8.0
+    assert feed["interval_days"] == 60
+    assert feed["blocks"] == [{"category": "prune", "min_gap_days": 7}]
+    assert set(feed["valid_months"]) == {3, 4, 5, 6}
+    assert {t["category"] for t in merged} == {"fertilize", "prune"}
+    products = [r["name"] for r in feed["resource_plan"] if r["unit"] != "ea"]
+    assert products == ["Balanced fertilizer (8-3-9)"]
+
+
+def test_scale_uses_recommended_product_name():
+    defaulted = cp.scale("fertilize", "standard", height_m=3.0, spread_m=None)
+    urea = cp.scale(
+        "fertilize", "standard", height_m=3.0, spread_m=None, product="22-0-0"
+    )
+    assert defaulted.resource_plan[0].name == "Balanced fertilizer (8-3-9)"
+    assert urea.resource_plan[0].name == "22-0-0"
+    assert urea.resource_plan[0].quantity == defaulted.resource_plan[0].quantity
+    assert urea.estimated_minutes == defaulted.estimated_minutes
+
+
+def test_merge_keeps_distinct_fertilizer_products():
+    balanced = cp.scale("fertilize", "standard", height_m=3.0, spread_m=None)
+    urea = cp.scale(
+        "fertilize", "standard", height_m=3.0, spread_m=None, product="22-0-0"
+    )
+    templates = [
+        {
+            "name": "Balanced feed",
+            "category": "fertilize",
+            "rate_class": "standard",
+            "interval_days": 90,
+            "priority_score": 6.0,
+            "resource_plan": [r.as_dict() for r in balanced.resource_plan],
+            "required_resources": balanced.required_resources,
+            "blocks": [],
+            "valid_months": [3, 4, 5],
+        },
+        {
+            "name": "Nitrogen feed",
+            "category": "fertilize",
+            "rate_class": "standard",
+            "interval_days": 90,
+            "priority_score": 7.0,
+            "resource_plan": [r.as_dict() for r in urea.resource_plan],
+            "required_resources": urea.required_resources,
+            "blocks": [],
+            "valid_months": [3, 4, 5],
+        },
+    ]
+    merged = cp.merge_duplicate_product_templates(templates)
+    assert len(merged) == 2
+    names = {t["name"] for t in merged}
+    assert names == {"Balanced feed", "Nitrogen feed"}
+
+
+def test_merge_same_analysis_written_differently():
+    a = cp.scale("fertilize", "standard", height_m=3.0, spread_m=None)
+    b = cp.scale(
+        "fertilize",
+        "standard",
+        height_m=3.0,
+        spread_m=None,
+        product="8-3-9",
+    )
+    templates = [
+        {
+            "name": "Nitrogen feed",
+            "category": "fertilize",
+            "interval_days": 90,
+            "priority_score": 6.0,
+            "resource_plan": [r.as_dict() for r in a.resource_plan],
+            "blocks": [],
+            "valid_months": [],
+        },
+        {
+            "name": "Potassium feed",
+            "category": "fertilize",
+            "interval_days": 90,
+            "priority_score": 5.0,
+            "resource_plan": [r.as_dict() for r in b.resource_plan],
+            "blocks": [],
+            "valid_months": [],
+        },
+    ]
+    merged = cp.merge_duplicate_product_templates(templates)
+    assert len(merged) == 1
+    assert "Nitrogen" in merged[0]["name"] and "Potassium" in merged[0]["name"]
 
 
 # --------------------------------------------------------------------------
@@ -177,6 +310,70 @@ def test_generate_scales_from_height_then_baseline_materialises_tasks():
         assert len([t for t in rows if t["template_id"] == feed.id]) == 1
 
     _run(body)
+
+
+def test_generate_merges_nitrogen_and_potassium_feed():
+    dupe = _CarePlanModel(items=[
+        _PlanItem(name="Nitrogen feed", category="fertilize", rate_class="standard",
+                  interval_days=90, priority_score=6.0),
+        _PlanItem(name="Potassium feed", category="fertilize", rate_class="standard",
+                  interval_days=90, priority_score=5.0),
+        _PlanItem(name="Structural prune", category="prune", rate_class="light",
+                  interval_days=365, priority_score=4.0),
+    ])
+
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 3.0}
+        ))["tree_id"]
+        with fake_plan_llm(dupe):
+            plan = await svc.generate(tid)
+        feeds = [t for t in plan.templates if t.category == "fertilize"]
+        assert len(feeds) == 1
+        assert "Nitrogen" in feeds[0].name and "Potassium" in feeds[0].name
+        products = [r.name for r in feeds[0].resource_plan if r.unit != "ea"]
+        assert products == ["Balanced fertilizer (8-3-9)"]
+        assert len(plan.templates) == 2
+
+    _run(body)
+
+
+def test_generate_keeps_distinct_fertilizer_products():
+    distinct = _CarePlanModel(items=[
+        _PlanItem(name="Nitrogen feed", category="fertilize", rate_class="standard",
+                  interval_days=90, priority_score=6.0, product="22-0-0"),
+        _PlanItem(name="Balanced feed", category="fertilize", rate_class="standard",
+                  interval_days=90, priority_score=5.0, product="8-3-9"),
+        _PlanItem(name="Structural prune", category="prune", rate_class="light",
+                  interval_days=365, priority_score=4.0),
+    ])
+
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create(
+            {"species": "mango", "variety": "Kent", "height_m": 3.0}
+        ))["tree_id"]
+        with fake_plan_llm(distinct):
+            plan = await svc.generate(tid)
+        feeds = [t for t in plan.templates if t.category == "fertilize"]
+        assert len(feeds) == 2
+        products = {r.name for t in feeds for r in t.resource_plan if r.unit != "ea"}
+        assert products == {"22-0-0", "8-3-9"}
+        assert len(plan.templates) == 3
+
+    _run(body)
+
+
+def test_rescale_keeps_recommended_product():
+    patch = rescale_template(
+        {
+            "category": "fertilize",
+            "rate_class": "heavy",
+            "resource_plan": [{"name": "22-0-0", "quantity": 0.4, "unit": "kg"}],
+        },
+        {"height_m": 3.0, "canopy_spread_m": None},
+    )
+    assert patch["resource_plan"][0]["name"] == "22-0-0"
+    assert patch["resource_plan"][0]["quantity"] > 0.4
 
 
 def test_edit_template_rescales_and_resyncs_open_task():

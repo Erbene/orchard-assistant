@@ -94,6 +94,7 @@ class TaskRead(TaskBase):
     tree_id: int
     template_id: int | None = None
     template_category: str | None = None
+    template_blocks: list[dict] = Field(default_factory=list)
     status: TaskStatus
     created_at: datetime
     completed_at: datetime | None = None

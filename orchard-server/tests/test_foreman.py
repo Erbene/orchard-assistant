@@ -221,3 +221,85 @@ def test_graph_skips_resource_interrupt_when_nothing_needed():
     r = g.invoke({"pending_tasks": tasks, "available_minutes": 120}, cfg)
     assert r.get("__interrupt__") is None                   # no time interrupt, no resource interrupt
     assert {t["id"] for t in r["proposed_tasks"]} == {1, 2}
+
+
+def test_refit_does_not_backfill_sibling_fertilize():
+    nitrogen = {
+        **_task(1, "Nitrogen feed", 8.0, 25, ["Balanced fertilizer (8-3-9)"]),
+        "template_category": "fertilize",
+        "_effective_score": 8.0,
+    }
+    potassium = {
+        **_task(2, "Potassium feed", 6.0, 25, ["Balanced fertilizer (8-3-9)"]),
+        "template_category": "fertilize",
+        "_effective_score": 6.0,
+    }
+    mulch = {**_task(3, "mulch ring", 3.0, 20), "template_category": "mulch", "_effective_score": 3.0}
+    final, dropped = refit([nitrogen, potassium, mulch], [nitrogen], [], minutes=90)
+    assert dropped == []
+    assert {t["id"] for t in final} == {1, 3}
+
+
+def test_graph_one_fertilize_per_tree_per_session():
+    g = _graph()
+    cfg = {"configurable": {"thread_id": "t-fert"}}
+    tasks = [
+        {
+            **_task(1, "Nitrogen feed", 8.0, 25, ["Balanced fertilizer (8-3-9)"]),
+            "template_category": "fertilize",
+        },
+        {
+            **_task(2, "Potassium feed", 6.0, 25, ["Balanced fertilizer (8-3-9)"]),
+            "template_category": "fertilize",
+        },
+        {**_task(3, "mulch ring", 3.0, 20), "template_category": "mulch"},
+    ]
+    r = g.invoke({"pending_tasks": tasks, "available_minutes": 120}, cfg)
+    assert r["__interrupt__"][0].value["ask"] == "have_resources"
+    r = g.invoke(Command(resume=["Balanced fertilizer (8-3-9)"]), cfg)
+    assert r.get("__interrupt__") is None
+    ids = {t["id"] for t in r["proposed_tasks"]}
+    assert ids == {1, 3}
+    dropped = next(t for t in r["dropped_tasks"] if t["id"] == 2)
+    assert "one fertilize" in dropped["_drop_reason"]
+    assert "Nitrogen" in r["summary"] or "fertilize" in r["summary"].lower() or "Left out" in r["summary"]
+
+
+def test_graph_fertilize_on_two_trees_both_kept():
+    g = _graph()
+    cfg = {"configurable": {"thread_id": "t-fert-2"}}
+    tasks = [
+        {
+            **_task(1, "Nitrogen feed", 8.0, 20, ["Balanced fertilizer (8-3-9)"]),
+            "template_category": "fertilize",
+        },
+        {
+            **_task(2, "Nitrogen feed", 7.0, 20, ["Balanced fertilizer (8-3-9)"]),
+            "tree_id": 2,
+            "template_category": "fertilize",
+        },
+    ]
+    r = g.invoke({"pending_tasks": tasks, "available_minutes": 120}, cfg)
+    r = g.invoke(Command(resume=["Balanced fertilizer (8-3-9)"]), cfg)
+    assert {t["id"] for t in r["proposed_tasks"]} == {1, 2}
+
+
+def test_agronomist_review_drops_remaining_adversary(monkeypatch):
+    from app.agent import foreman as fm
+
+    def fake_review(tasks, settings):
+        victim = next(t for t in tasks if t["id"] == 2)
+        return [{**victim, "_drop_reason": "agronomist: two scouts same tree"}]
+
+    monkeypatch.setattr(fm, "review_session_adversaries", fake_review)
+    g = _graph()
+    cfg = {"configurable": {"thread_id": "t-review"}}
+    tasks = [
+        {**_task(1, "scout pests", 5.0, 15), "template_category": "scout"},
+        {**_task(2, "scout disease", 4.0, 15), "template_category": "scout"},
+    ]
+    r = g.invoke({"pending_tasks": tasks, "available_minutes": 120}, cfg)
+    assert r.get("__interrupt__") is None
+    assert {t["id"] for t in r["proposed_tasks"]} == {1}
+    dropped = next(t for t in r["dropped_tasks"] if t["id"] == 2)
+    assert "agronomist" in dropped["_drop_reason"]

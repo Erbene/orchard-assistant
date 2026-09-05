@@ -12,6 +12,7 @@ routes ``agronomy`` turns to.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Literal, TypedDict
 
@@ -24,7 +25,7 @@ from ..config import Settings
 from ..core.logging import get_logger
 from .ollama import chat_model
 from ..core.tracing import traced
-from .care_plan import CATEGORIES, scale
+from .care_plan import CATEGORIES, merge_duplicate_product_templates, scale
 from ..services.exceptions import LLMUnavailable
 from ..services.source_service import FusedSource, SourceService
 
@@ -175,6 +176,10 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "counted from there. Name the actual product / cut / operation you chose "
     "(e.g. 'When was copper fungicide last applied for anthracnose?', 'When was "
     "the last dormant-season structural prune?'). Never leave it blank.\n"
+    "- product: the recommended product when the notes (or a real agronomic "
+    "need) pick a specific one (e.g. '22-0-0', 'Balanced fertilizer (8-3-9)', "
+    "'Copper fungicide'). Leave empty to use the system's default for the "
+    "category. Do not invent a brand the notes do not name.\n"
     "- blocks: after THIS job is done, which other categories must wait before "
     "they can run on the same tree. List of {category, min_gap_days} using ONLY "
     "closed categories from the list above (e.g. spray blocks prune for 7 days; "
@@ -188,7 +193,12 @@ CARE_PLAN_SYSTEM_PROMPT: str = (
     "Do NOT invent quantities, minutes, or product volumes - the system scales "
     "those from the tree's measured size. Do NOT include one-off establishment "
     "tasks. Prefer the grower's linked notes for timing, nutrient restrictions, "
-    "and product choices."
+    "and product choices.\n\n"
+    "Merge vs split on the recommended PRODUCT, not the task nickname. If two "
+    "feeds would use the same bag or the same analysis (two 'Nitrogen feed' / "
+    "'Potassium feed' lines that both apply 8-3-9), emit ONE task. If the notes "
+    "recommend distinct products (22-0-0 vs 8-3-9 vs 0-0-50), those stay "
+    "separate tasks. The same rule applies to sprays and other dosed jobs."
 )
 
 
@@ -229,7 +239,16 @@ class _PlanItem(BaseModel):
     valid_months: list[int] = Field(default_factory=list)
     biological_anchor: Literal["flowering", "harvest", "dormancy"] | None = None
     anchor_offset_days: int | None = None
+    product: str | None = Field(default=None, max_length=80)
     blocks: list[_BlockRule] = Field(default_factory=list, max_length=8)
+
+    @field_validator("product", mode="before")
+    @classmethod
+    def _blank_product(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class _CarePlanModel(BaseModel):
@@ -320,6 +339,7 @@ async def generate_care_plan(
             item.rate_class,
             height_m=float(height) if height is not None else None,
             spread_m=float(spread) if spread is not None else None,
+            product=item.product,
         )
         question = (item.baseline_question or "").strip() or _BASELINE_QUESTION.get(
             item.category, f"When was '{item.name.strip()}' last done?"
@@ -342,6 +362,7 @@ async def generate_care_plan(
                 "source_ids": source_ids,
             }
         )
+    templates = merge_duplicate_product_templates(templates)
 
     flowering_months = plan.expected_flowering_months or (
         [plan.expected_flowering_month] if plan.expected_flowering_month else []
@@ -379,6 +400,7 @@ def rescale_template(template: dict, tree: dict) -> dict:
         height_m=_num(tree.get("height_m")),
         spread_m=_num(tree.get("canopy_spread_m")),
         fallback_minutes=template.get("estimated_minutes"),
+        product=_existing_product(template),
     )
     return {
         "estimated_minutes": scaled.estimated_minutes,
@@ -389,3 +411,108 @@ def rescale_template(template: dict, tree: dict) -> dict:
 
 def _num(value: object) -> float | None:
     return float(value) if value is not None else None
+
+
+def _existing_product(template: dict) -> str | None:
+    """Keep a previously recommended product name when re-scaling amounts."""
+    for line in template.get("resource_plan") or []:
+        if isinstance(line, dict):
+            name, unit = str(line.get("name") or ""), str(line.get("unit") or "")
+        else:
+            name, unit = str(getattr(line, "name", "")), str(getattr(line, "unit", ""))
+        if unit.strip().lower() == "ea":
+            continue
+        name = name.strip()
+        if name:
+            return name
+    return None
+
+
+# --------------------------------------------------------------------------
+# Same-session adversarial review (Foreman asks before committing a plan)
+# --------------------------------------------------------------------------
+
+SESSION_REVIEW_PROMPT: str = (
+    "You are the Orchard Agronomist reviewing a proposed same-day work session. "
+    "The scheduler already dropped obvious duplicates. Flag remaining pairs that "
+    "must NOT run together on the SAME tree: two nutrient applications, two "
+    "sprays, the same product twice, or a job whose PHI/block rules forbid the "
+    "other the same day (for example spray then prune). "
+    "For each pair, drop the lower-priority task and keep the more important one. "
+    "If nothing is adversarial, return an empty drops list. "
+    "Do not invent tasks. Do not drop work on a different tree."
+)
+
+
+class _AdversaryDrop(BaseModel):
+    drop_task_id: int
+    keep_task_id: int
+    reason: str = Field(default="", max_length=240)
+
+
+class _SessionReview(BaseModel):
+    drops: list[_AdversaryDrop] = Field(default_factory=list, max_length=12)
+
+
+def review_session_adversaries(
+    tasks: list[dict], settings: Settings
+) -> list[dict]:
+    """Ask the agronomist which proposed tasks are adversarial. Never raises.
+
+    Returns copies of the tasks to drop, tagged with ``_drop_reason``. Offline
+    or malformed model output yields an empty list — deterministic session
+    rules already ran.
+    """
+    if len(tasks) < 2:
+        return []
+    payload = [
+        {
+            "id": t.get("id"),
+            "tree_id": t.get("tree_id"),
+            "action_type": t.get("action_type"),
+            "category": t.get("template_category") or t.get("category"),
+            "priority": t.get("_effective_score", t.get("priority_score")),
+            "resources": t.get("required_resources") or [],
+            "blocks": t.get("template_blocks") or t.get("blocks") or [],
+        }
+        for t in tasks
+    ]
+    try:
+        llm = chat_model(
+            settings,
+            model=settings.agronomist_model,
+            temperature=0.0,
+            num_predict=300,
+            timeout=45.0,
+        ).with_structured_output(_SessionReview)
+        review: _SessionReview = llm.invoke(
+            [
+                SystemMessage(SESSION_REVIEW_PROMPT),
+                HumanMessage(json.dumps({"proposed": payload}, default=str)),
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 - offline / model missing
+        _log.info("agronomist.session_review.fallback", error=str(exc)[:160])
+        return []
+
+    by_id = {t["id"]: t for t in tasks if t.get("id") is not None}
+    dropped: list[dict] = []
+    seen: set[int] = set()
+    for item in review.drops:
+        drop_id, keep_id = item.drop_task_id, item.keep_task_id
+        if drop_id not in by_id or keep_id not in by_id or drop_id == keep_id:
+            continue
+        if drop_id in seen:
+            continue
+        seen.add(drop_id)
+        reason = (item.reason or "").strip() or (
+            f"agronomist: adversarial with #{keep_id}"
+        )
+        dropped.append({**by_id[drop_id], "_drop_reason": reason})
+    if dropped:
+        _log.info(
+            "agronomist.session_review.drops",
+            count=len(dropped),
+            ids=[t["id"] for t in dropped],
+        )
+    return dropped

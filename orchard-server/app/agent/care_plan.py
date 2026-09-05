@@ -12,6 +12,7 @@ Nothing here calls a model or touches the DB.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -103,6 +104,18 @@ def _round_minutes(value: float) -> int:
     return max(5, int(round(value / 5.0)) * 5)
 
 
+_NPK = re.compile(r"\b(\d{1,2})\s*-\s*(\d{1,2})\s*-\s*(\d{1,2})\b")
+
+
+def _normalize_product(name: str) -> str:
+    """Same bag / same analysis → same key ('8-3-9' == 'Balanced fertilizer (8-3-9)')."""
+    text = " ".join(name.strip().lower().split())
+    match = _NPK.search(text)
+    if match:
+        return f"{int(match.group(1))}-{int(match.group(2))}-{int(match.group(3))}"
+    return text
+
+
 def scale(
     category: str,
     rate_class: str,
@@ -110,8 +123,14 @@ def scale(
     height_m: float | None,
     spread_m: float | None,
     fallback_minutes: int | None = None,
+    product: str | None = None,
 ) -> ScaledTask:
-    """Scale one care task to a tree's size."""
+    """Scale one care task to a tree's size.
+
+    ``product`` replaces the default consumable name when the agronomist
+    recommended a specific fertilizer or spray; quantities still come from
+    the category rate table.
+    """
     rate = _RATES.get(category, _RATES["other"])  # type: ignore[arg-type]
     mult = _RATE_MULT.get(rate_class, 1.0)  # type: ignore[arg-type]
     volume = canopy_volume_m3(height_m, spread_m)
@@ -120,13 +139,103 @@ def scale(
     if category == "other" and fallback_minutes:
         minutes = float(fallback_minutes)
 
-    lines: list[ResourceLine] = [
-        ResourceLine(name=name, quantity=per_m3 * volume * mult, unit=unit)
-        for name, unit, per_m3 in rate.consumables
-    ]
+    override = (product or "").strip()
+    lines: list[ResourceLine] = []
+    for name, unit, per_m3 in rate.consumables:
+        lines.append(
+            ResourceLine(
+                name=override or name,
+                quantity=per_m3 * volume * mult,
+                unit=unit,
+            )
+        )
+        override = ""  # only the first consumable takes the recommended name
     tools = list(rate.tools)
     if rate.tall_tool and (height_m or _DEFAULT_HEIGHT_M) >= rate.tall_tool[1]:
         tools.append(rate.tall_tool[0])
     lines.extend(ResourceLine(name=t, quantity=1, unit="ea") for t in tools)
 
     return ScaledTask(estimated_minutes=_round_minutes(minutes), resource_plan=lines)
+
+
+def _product_key(template: dict) -> tuple[str, str, str] | None:
+    """Category + first dosed product (skip ``ea`` tools). ``None`` = do not merge."""
+    category = str(template.get("category") or "").strip()
+    if not category:
+        return None
+    for line in template.get("resource_plan") or []:
+        if isinstance(line, ResourceLine):
+            name, unit = line.name, line.unit
+        else:
+            name = str(line.get("name") or "")
+            unit = str(line.get("unit") or "")
+        if unit.strip().lower() == "ea":
+            continue
+        name = name.strip()
+        if not name:
+            continue
+        return (category, _normalize_product(name), unit.strip().lower())
+    return None
+
+
+def _union_blocks(left: list | None, right: list | None) -> list[dict]:
+    by_cat: dict[str, int] = {}
+    for block in list(left or []) + list(right or []):
+        cat = str(block.get("category") or "")
+        if not cat:
+            continue
+        gap = int(block.get("min_gap_days") or 0)
+        by_cat[cat] = max(by_cat.get(cat, 0), gap)
+    return [{"category": cat, "min_gap_days": gap} for cat, gap in by_cat.items() if gap >= 1]
+
+
+def _merge_product_pair(keep: dict, other: dict) -> dict:
+    names: list[str] = []
+    for name in (keep.get("name"), other.get("name")):
+        label = str(name or "").strip()
+        if label and label not in names:
+            names.append(label)
+    rank = {"light": 0, "standard": 1, "heavy": 2}
+    numeric = keep
+    if rank.get(other.get("rate_class"), 1) > rank.get(keep.get("rate_class"), 1):
+        numeric = other
+    months = sorted(
+        {int(m) for m in (keep.get("valid_months") or []) + (other.get("valid_months") or [])}
+    )
+    return {
+        **numeric,
+        "name": " / ".join(names) if names else str(numeric.get("name") or "Feed"),
+        "priority_score": max(
+            float(keep.get("priority_score") or 0.0),
+            float(other.get("priority_score") or 0.0),
+        ),
+        "interval_days": min(
+            int(keep.get("interval_days") or 365),
+            int(other.get("interval_days") or 365),
+        ),
+        "blocks": _union_blocks(keep.get("blocks"), other.get("blocks")),
+        "valid_months": months,
+        "baseline_question": keep.get("baseline_question") or other.get("baseline_question"),
+    }
+
+
+def merge_duplicate_product_templates(templates: list[dict]) -> list[dict]:
+    """Collapse tasks that recommend the same dosed product in one category.
+
+    Two feeds that both apply 8-3-9 become one template. A 22-0-0 feed and an
+    8-3-9 feed stay separate. Tasks with only tools (``ea``) are never merged.
+    """
+    merged_at: dict[tuple[str, str, str], int] = {}
+    out: list[dict] = []
+    for template in templates:
+        key = _product_key(template)
+        if key is None:
+            out.append(template)
+            continue
+        idx = merged_at.get(key)
+        if idx is None:
+            merged_at[key] = len(out)
+            out.append(dict(template))
+            continue
+        out[idx] = _merge_product_pair(out[idx], template)
+    return out
