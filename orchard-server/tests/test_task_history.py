@@ -10,7 +10,7 @@ from app.dependencies import get_settings_dep
 from app.main import app
 
 from conftest import stack_settings
-from test_care_plan import fake_plan_llm
+from test_care_plan import _link_note_http, fake_plan_llm
 
 
 @pytest.fixture()
@@ -28,6 +28,7 @@ def _care_plan_inbox(client: TestClient) -> tuple[int, list[dict]]:
         json={"species": "mango", "variety": "Kent", "height_m": 3.5},
     ).json()
     tid = tree["tree_id"]
+    _link_note_http(client, tid)
     with fake_plan_llm():
         client.post(f"/api/v1/trees/{tid}/care-plan/generate")
     client.post(f"/api/v1/trees/{tid}/care-plan/baseline", json={"answers": []})
@@ -100,6 +101,7 @@ def test_inbox_last_completed_from_baseline_then_history(client):
         json={"species": "mango", "variety": "Kent", "height_m": 3.5},
     ).json()
     tid = tree["tree_id"]
+    _link_note_http(client, tid)
     with fake_plan_llm():
         plan = client.post(f"/api/v1/trees/{tid}/care-plan/generate").json()
     feed = next(t for t in plan["templates"] if t["category"] == "fertilize")

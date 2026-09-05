@@ -29,7 +29,7 @@ from ..schemas.care_plan import (
     TreePhenologyRead,
 )
 from ..schemas.task import TaskRead
-from .exceptions import NotFoundError
+from .exceptions import DomainValidationError, NotFoundError
 from .source_service import SourceService
 
 _RESCALE_TRIGGERS = {"category", "rate_class"}
@@ -96,6 +96,11 @@ class CarePlanService:
 
     async def generate(self, tree_id: int) -> CarePlan:
         tree = await self._require_tree(tree_id)
+        if not await self._sources.allowed_source_ids(tree_id):
+            raise DomainValidationError(
+                "sources",
+                "Link at least one knowledge source before generating a care plan.",
+            )
 
         draft = await generate_care_plan(
             tree=tree, sources=self._sources, settings=self._settings

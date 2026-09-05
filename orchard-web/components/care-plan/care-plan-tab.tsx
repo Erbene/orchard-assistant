@@ -34,18 +34,22 @@ export function CarePlanTab({
   const toast = useToast();
   const [plan, setPlan] = React.useState<CarePlan | null>(null);
   const [tree, setTree] = React.useState<Tree | null>(null);
+  const [sourceCount, setSourceCount] = React.useState(0);
   const [generating, setGenerating] = React.useState(false);
   const [wizardOpen, setWizardOpen] = React.useState(false);
   const didAuto = React.useRef(false);
+  const hasSources = sourceCount > 0;
 
   const load = React.useCallback(async () => {
-    const [p, t] = await Promise.all([
+    const [p, t, linked] = await Promise.all([
       carePlanApi.get(treeId),
       treesApi.get(treeId),
+      treesApi.linkedSources(treeId),
     ]);
     setPlan(p);
     setTree(t);
-    return p;
+    setSourceCount(linked.length);
+    return { plan: p, sourceCount: linked.length };
   }, [treeId]);
 
   const generate = React.useCallback(async () => {
@@ -68,8 +72,8 @@ export function CarePlanTab({
   }, [treeId, toast]);
 
   React.useEffect(() => {
-    load().then((p) => {
-      if (autoGenerate && !p.generated && !didAuto.current) {
+    load().then(({ plan: p, sourceCount: n }) => {
+      if (autoGenerate && n > 0 && !p.generated && !didAuto.current) {
         didAuto.current = true;
         void generate();
       }
@@ -117,7 +121,9 @@ export function CarePlanTab({
           <p className="text-sm text-muted-foreground">
             {plan.generated
               ? `${plan.templates.length} recurring tasks · ${plan.pending_task_count} scheduled`
-              : "The Agronomist drafts routine tasks from this tree's linked notes and size."}
+              : hasSources
+                ? "The Agronomist drafts routine tasks from this tree's linked notes and size."
+                : "Link at least one knowledge source before generating a care plan."}
           </p>
         </div>
         <div className="flex gap-2">
@@ -133,7 +139,7 @@ export function CarePlanTab({
           )}
           <Button
             onClick={generate}
-            disabled={generating}
+            disabled={generating || !hasSources}
             className="gap-1.5"
           >
             {generating ? (
@@ -158,7 +164,9 @@ export function CarePlanTab({
         </div>
       ) : plan.templates.length === 0 ? (
         <div className="rounded-lg border border-dashed py-16 text-center text-sm text-muted-foreground">
-          No care plan yet.
+          {hasSources
+            ? "No care plan yet."
+            : "Link knowledge sources on this tree, then generate a care plan."}
         </div>
       ) : (
         <ul className="space-y-3">

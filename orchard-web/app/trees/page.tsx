@@ -143,8 +143,7 @@ export default function TreesPage() {
               setEditing(null);
               void refresh();
               if (wasCreate) {
-                // land on the new tree's Care Plan tab and auto-generate
-                router.push(`/trees/${saved.tree_id}?tab=care-plan&autogen=1`);
+                router.push(`/trees/${saved.tree_id}`);
               }
             }}
           />

@@ -231,6 +231,26 @@ def fake_plan_llm(draft: _CarePlanModel = _DRAFT):
         yield
 
 
+async def _link_note(svc: CarePlanService, tree_id: int) -> None:
+    source = await svc._sources.ingest_text(
+        "notes", "Routine mango care: fertilize in spring, prune after harvest."
+    )
+    await svc._sources.set_tree_sources(tree_id, [source.id])
+
+
+def _link_note_http(client: TestClient, tree_id: int) -> None:
+    src = client.post(
+        "/api/v1/sources",
+        data={"name": "notes", "text": "Routine mango care: fertilize in spring."},
+    )
+    assert src.status_code == 201
+    linked = client.put(
+        f"/api/v1/trees/{tree_id}/sources",
+        json={"source_ids": [src.json()["id"]]},
+    )
+    assert linked.status_code == 200
+
+
 def _run(body):
     settings = stack_settings()
 
@@ -258,6 +278,7 @@ def test_generate_scales_from_height_then_baseline_materialises_tasks():
         tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 4.0}
         ))["tree_id"]
+        await _link_note(svc, tid)
 
         with fake_plan_llm():
             plan = await svc.generate(tid)
@@ -280,6 +301,7 @@ def test_generate_scales_from_height_then_baseline_materialises_tasks():
         small_tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 1.5}
         ))["tree_id"]
+        await _link_note(svc, small_tid)
         with fake_plan_llm():
             small_plan = await svc.generate(small_tid)
         small_feed = next(t for t in small_plan.templates if t.name == "Nitrogen feed")
@@ -326,6 +348,7 @@ def test_generate_merges_nitrogen_and_potassium_feed():
         tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 3.0}
         ))["tree_id"]
+        await _link_note(svc, tid)
         with fake_plan_llm(dupe):
             plan = await svc.generate(tid)
         feeds = [t for t in plan.templates if t.category == "fertilize"]
@@ -352,6 +375,7 @@ def test_generate_keeps_distinct_fertilizer_products():
         tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 3.0}
         ))["tree_id"]
+        await _link_note(svc, tid)
         with fake_plan_llm(distinct):
             plan = await svc.generate(tid)
         feeds = [t for t in plan.templates if t.category == "fertilize"]
@@ -381,6 +405,7 @@ def test_edit_template_rescales_and_resyncs_open_task():
         tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 3.0}
         ))["tree_id"]
+        await _link_note(svc, tid)
         with fake_plan_llm():
             plan = await svc.generate(tid)
         feed = next(t for t in plan.templates if t.category == "fertilize")
@@ -492,6 +517,7 @@ def test_complete_respawns_next_from_template():
         tid = (await trees.create(
             {"species": "mango", "variety": "Kent", "height_m": 2.5}
         ))["tree_id"]
+        await _link_note(svc, tid)
         with fake_plan_llm():
             plan = await svc.generate(tid)
         scout = next(t for t in plan.templates if t.category == "scout")
@@ -550,6 +576,7 @@ def test_apply_baseline_safety_skip_after_flowering_cutoff():
 def test_delete_template_removes_its_open_task():
     async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
         tid = (await trees.create({"species": "mango", "variety": "Kent"}))["tree_id"]
+        await _link_note(svc, tid)
         with fake_plan_llm():
             plan = await svc.generate(tid)
         await svc.apply_baseline(tid, [])
@@ -605,6 +632,7 @@ def test_care_plan_http_roundtrip(client):
     ).json()
     tid = tree["tree_id"]
     assert tree["height_m"] == 3.5
+    _link_note_http(client, tid)
 
     with fake_plan_llm():
         plan = client.post(f"/api/v1/trees/{tid}/care-plan/generate").json()
@@ -638,6 +666,7 @@ def test_generate_care_plan_503_when_ollama_down(client):
     tid = client.post(
         "/api/v1/trees", json={"species": "mango", "variety": "Kent"}
     ).json()["tree_id"]
+    _link_note_http(client, tid)
 
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=llm)
@@ -645,3 +674,13 @@ def test_generate_care_plan_503_when_ollama_down(client):
     with patch("app.agent.agronomist.chat_model", return_value=llm):
         r = client.post(f"/api/v1/trees/{tid}/care-plan/generate")
     assert r.status_code == 503
+
+
+def test_generate_care_plan_422_without_linked_sources(client):
+    tid = client.post(
+        "/api/v1/trees", json={"species": "mango", "variety": "Kent"}
+    ).json()["tree_id"]
+    r = client.post(f"/api/v1/trees/{tid}/care-plan/generate")
+    assert r.status_code == 422
+    assert "knowledge source" in r.json()["detail"].lower()
+    assert client.get(f"/api/v1/trees/{tid}/care-plan").json()["generated"] is False
