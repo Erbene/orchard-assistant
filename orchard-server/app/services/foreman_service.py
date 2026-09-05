@@ -126,4 +126,8 @@ class ForemanService:
             required_resources=list(t.get("required_resources") or []),
             escalated=t["id"] in escalated_ids,
             drop_reason=t.get("_drop_reason"),
+            tree_species=t.get("tree_species"),
+            tree_variety=t.get("tree_variety"),
+            template_category=t.get("template_category"),
+            last_completed=t.get("last_completed"),
         )

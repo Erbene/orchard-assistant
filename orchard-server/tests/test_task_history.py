@@ -94,6 +94,40 @@ def test_history_empty_for_unknown_tree_filter(client):
     assert client.get("/api/v1/tasks/history?tree_id=99999").json() == []
 
 
+def test_inbox_last_completed_from_baseline_then_history(client):
+    tree = client.post(
+        "/api/v1/trees",
+        json={"species": "mango", "variety": "Kent", "height_m": 3.5},
+    ).json()
+    tid = tree["tree_id"]
+    with fake_plan_llm():
+        plan = client.post(f"/api/v1/trees/{tid}/care-plan/generate").json()
+    feed = next(t for t in plan["templates"] if t["category"] == "fertilize")
+    last = "2026-03-15"
+    client.post(
+        f"/api/v1/trees/{tid}/care-plan/baseline",
+        json={"answers": [{"template_id": feed["id"], "last_done": last}]},
+    ).raise_for_status()
+
+    inbox = client.get("/api/v1/tasks").json()
+    feed_task = next(t for t in inbox if t["template_id"] == feed["id"])
+    assert feed_task["last_completed"] == last
+    assert feed_task["tree_species"] == "mango"
+    assert feed_task["tree_variety"] == "Kent"
+
+    other = next(t for t in inbox if t["template_id"] != feed["id"])
+    assert other["last_completed"] is None
+
+    client.post(f"/api/v1/tasks/{feed_task['id']}/complete").raise_for_status()
+    nxt = next(
+        t
+        for t in client.get("/api/v1/tasks").json()
+        if t["template_id"] == feed["id"]
+    )
+    assert nxt["last_completed"] >= last
+    assert nxt["id"] != feed_task["id"]
+
+
 def test_complete_is_idempotent_no_duplicate_log(client):
     _, inbox = _care_plan_inbox(client)
     task_id = inbox[0]["id"]

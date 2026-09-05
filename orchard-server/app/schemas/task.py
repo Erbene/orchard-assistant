@@ -99,6 +99,9 @@ class TaskRead(TaskBase):
     completed_at: datetime | None = None
     window_closes_on: date | None = None
     out_of_season: bool = False
+    last_completed: date | None = None
+    tree_species: str | None = None
+    tree_variety: str | None = None
 
 
 class InboxResourceLine(BaseModel):
@@ -116,6 +119,7 @@ class InboxTaskRead(TaskRead):
     template_resource_plan: list[InboxResourceLine] = Field(default_factory=list)
     tree_species: str
     tree_variety: str
+    last_completed: date | None = None
     window_closes_on: date | None = None
     out_of_season: bool = False
 

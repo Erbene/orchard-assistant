@@ -20,6 +20,7 @@ import { useToast } from "@/components/ui/toast";
 import { TimeStep } from "@/components/schedule/time-step";
 import { ResourceStep } from "@/components/schedule/resource-step";
 import { ScheduleList } from "@/components/schedule/schedule-list";
+import { TaskMetaPills } from "@/components/schedule/task-meta";
 import { ApiError, scheduleApi, tasksApi } from "@/lib/api";
 import type { ExecutedTask, InboxTask, ScheduleState } from "@/lib/types";
 
@@ -187,19 +188,17 @@ function HistoryPanel({ rows }: { rows: ExecutedTask[] | null }) {
         <li key={row.id} className="rounded-lg border p-3">
           <div className="flex items-center gap-2">
             <History className="size-3.5 shrink-0 text-muted-foreground" />
-            {row.category && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
-                {row.category}
-              </span>
-            )}
             <span className="truncate text-sm font-medium">{row.action_type}</span>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {new Date(row.executed_at).toLocaleDateString()}
-            {" · "}
-            {row.tree_species} · {row.tree_variety}
-            {row.estimated_minutes ? ` · ~${row.estimated_minutes} min` : ""}
-          </p>
+          <TaskMetaPills
+            treeSpecies={row.tree_species}
+            treeVariety={row.tree_variety}
+            treeId={row.tree_id}
+            category={row.category}
+            estimatedMinutes={row.estimated_minutes}
+            completedAt={row.executed_at}
+            resources={row.required_resources}
+          />
         </li>
       ))}
     </ul>
@@ -250,52 +249,33 @@ function TaskRow({
       return days >= 0 && days < 14;
     })();
 
+  const resourceLabels = task.template_resource_plan.map(
+    (r) => `${r.quantity} ${r.unit} ${r.name}`,
+  );
+
   return (
     <li className="flex items-start gap-3 rounded-lg border p-3">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          {task.template_category && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
-              {task.template_category}
-            </span>
-          )}
           <span className="truncate text-sm font-medium">
             {task.action_type}
           </span>
         </div>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {task.tree_species} · {task.tree_variety} · pri{" "}
-          {task.priority_score.toFixed(1)}
-          {task.estimated_minutes ? ` · ~${task.estimated_minutes} min` : ""}
-          {" · "}
-          {outOfSeason ? (
-            <>
-              due {due}
-              {" · "}
-              <span className="text-muted-foreground">out of season</span>
-            </>
-          ) : (
-            <span className={overdue ? "font-medium text-destructive" : ""}>
-              {overdue ? "overdue" : `due ${due}`}
-            </span>
-          )}
-          {windowClosing && task.window_closes_on && (
-            <>
-              {" · "}
-              <span className="font-medium text-amber-600 dark:text-amber-400">
-                window closes{" "}
-                {new Date(task.window_closes_on).toLocaleDateString()}
-              </span>
-            </>
-          )}
-        </p>
-        {task.template_resource_plan.length > 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {task.template_resource_plan
-              .map((r) => `${r.quantity} ${r.unit} ${r.name}`)
-              .join(" · ")}
-          </p>
-        )}
+        <TaskMetaPills
+          treeSpecies={task.tree_species}
+          treeVariety={task.tree_variety}
+          treeId={task.tree_id}
+          category={task.template_category}
+          estimatedMinutes={task.estimated_minutes}
+          due={due}
+          overdue={overdue}
+          outOfSeason={outOfSeason}
+          windowClosing={windowClosing}
+          windowClosesOn={task.window_closes_on}
+          lastCompleted={task.last_completed}
+          resources={resourceLabels}
+          priority={task.priority_score}
+        />
       </div>
       <div className="flex shrink-0 gap-1">
         <Button
@@ -370,8 +350,14 @@ function PlanSessionDialog({
   const step = state?.step ?? "need_time";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCompleted();
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Plan a work session</DialogTitle>
         </DialogHeader>
@@ -401,7 +387,11 @@ function PlanSessionDialog({
               }
             />
           ) : state ? (
-            <ScheduleList state={state} onRestart={() => setState(null)} />
+            <ScheduleList
+              state={state}
+              onRestart={() => setState(null)}
+              onTasksCompleted={onCompleted}
+            />
           ) : null}
         </div>
       </DialogContent>

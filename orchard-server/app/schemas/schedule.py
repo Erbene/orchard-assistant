@@ -1,6 +1,7 @@
 """Transport models for the Foreman's JIT scheduling loop (``/api/v1/schedule``)."""
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,10 @@ class ScheduleTask(BaseModel):
     required_resources: list[str] = Field(default_factory=list)
     escalated: bool = False
     drop_reason: str | None = None
+    tree_species: str | None = None
+    tree_variety: str | None = None
+    template_category: str | None = None
+    last_completed: date | None = None
 
 
 class ScheduleEscalation(BaseModel):

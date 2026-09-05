@@ -43,6 +43,20 @@ _INSERTABLE = (
 )
 _JSON_COLUMNS = ("required_resources",)
 
+# Most recent completion for this template (or tree + action if untemplated),
+# falling back to the Care Plan baseline last-done stored on ``anchor_date``.
+_LAST_COMPLETED_SQL = (
+    "COALESCE("
+    " (SELECT MAX(l.executed_at)::date FROM executed_task_log l"
+    "  WHERE l.outcome = 'completed' AND ("
+    "    (t.template_id IS NOT NULL AND l.template_id = t.template_id)"
+    "    OR (t.template_id IS NULL AND l.tree_id = t.tree_id"
+    "        AND l.action_type = t.action_type)"
+    "  )),"
+    " tt.anchor_date"
+    ")"
+)
+
 
 def _encode(fields: Row) -> Row:
     out = dict(fields)
@@ -106,9 +120,12 @@ class TaskRepository:
         """
         sql = (
             "SELECT t.*, tt.valid_months AS template_valid_months,"
-            " tt.category AS template_category"
+            " tt.category AS template_category,"
+            " tr.species AS tree_species, tr.variety AS tree_variety,"
+            f" {_LAST_COMPLETED_SQL} AS last_completed"
             " FROM task t"
             " LEFT JOIN task_templates tt ON tt.id = t.template_id"
+            " JOIN tree tr ON tr.tree_id = t.tree_id"
             " WHERE t.status = 'pending'"
         )
         params: dict[str, Any] = {}
@@ -215,7 +232,8 @@ class TaskRepository:
                 "SELECT t.*, tt.name AS template_name, tt.category AS template_category,"
                 " tt.resource_plan AS template_resource_plan,"
                 " tt.valid_months AS template_valid_months,"
-                " tr.species AS tree_species, tr.variety AS tree_variety"
+                " tr.species AS tree_species, tr.variety AS tree_variety,"
+                f" {_LAST_COMPLETED_SQL} AS last_completed"
                 " FROM task t"
                 " LEFT JOIN task_templates tt ON tt.id = t.template_id"
                 " JOIN tree tr ON tr.tree_id = t.tree_id"

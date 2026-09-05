@@ -104,6 +104,10 @@ export interface ScheduleTask {
   required_resources: string[];
   escalated: boolean;
   drop_reason: string | null;
+  tree_species?: string | null;
+  tree_variety?: string | null;
+  template_category?: string | null;
+  last_completed?: string | null;
 }
 
 export interface ScheduleEscalation {
@@ -148,6 +152,9 @@ export interface TaskRead {
   completed_at: string | null;
   window_closes_on?: string | null;
   out_of_season?: boolean;
+  last_completed?: string | null;
+  tree_species?: string | null;
+  tree_variety?: string | null;
 }
 
 // -- Care Plan engine ---------------------------------------------------
@@ -236,6 +243,7 @@ export interface InboxTask extends TaskRead {
   tree_species: string;
   tree_variety: string;
   window_closes_on: string | null;
+  last_completed: string | null;
 }
 
 export interface ExecutedTask {

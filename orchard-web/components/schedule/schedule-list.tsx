@@ -16,13 +16,16 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { ApiError, scheduleApi } from "@/lib/api";
 import type { ScheduleState, ScheduleTask } from "@/lib/types";
+import { TaskMetaPills, TreePill } from "@/components/schedule/task-meta";
 
 export function ScheduleList({
   state,
   onRestart,
+  onTasksCompleted,
 }: {
   state: ScheduleState;
   onRestart: () => void;
+  onTasksCompleted?: () => void;
 }) {
   const toast = useToast();
   const [done, setDone] = React.useState<Set<number>>(new Set());
@@ -36,6 +39,7 @@ export function ScheduleList({
       const marked = await scheduleApi.complete(ids);
       setDone((prev) => new Set([...prev, ...marked.map((t) => t.id)]));
       toast.success(`Marked ${marked.length} task(s) complete`);
+      onTasksCompleted?.();
     } catch (err) {
       toast.error("Could not update", err instanceof ApiError ? err.detail : undefined);
     } finally {
@@ -51,6 +55,7 @@ export function ScheduleList({
       setDone((prev) => new Set([...prev, ...res.marked]));
       setReport("");
       toast.success("Foreman updated", res.note);
+      if (res.marked.length > 0) onTasksCompleted?.();
     } catch (err) {
       toast.error("Could not report", err instanceof ApiError ? err.detail : undefined);
     } finally {
@@ -71,6 +76,7 @@ export function ScheduleList({
           <p className="text-sm text-muted-foreground">
             {state.proposed_tasks.length} task(s) · ~{totalMin} of{" "}
             {state.available_minutes} min
+            {done.size > 0 ? ` · ${done.size} completed` : ""}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={onRestart}>
@@ -126,8 +132,15 @@ export function ScheduleList({
                   {t.escalated && (
                     <Badge variant="destructive" className="shrink-0">overdue</Badge>
                   )}
-                  <span className="font-medium">#{t.id} {t.action_type}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">
+                  <span className="min-w-0 truncate font-medium">
+                    #{t.id} {t.action_type}
+                  </span>
+                  <TreePill
+                    species={t.tree_species}
+                    variety={t.tree_variety}
+                    treeId={t.tree_id}
+                  />
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                     {t.drop_reason ?? "no time"}
                   </span>
                 </li>
@@ -177,28 +190,30 @@ function TaskRow({
   return (
     <li
       className={cn(
-        "flex items-center gap-3 rounded-md border bg-card px-3 py-2.5 text-sm",
+        "flex items-start gap-3 rounded-md border bg-card px-3 py-2.5 text-sm",
         done && "opacity-50",
       )}
     >
-      {task.escalated && (
-        <Badge variant="destructive" className="shrink-0">overdue</Badge>
-      )}
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className={cn("truncate font-medium", done && "line-through")}>
           #{task.id} {task.action_type}
         </p>
-        <p className="text-xs text-muted-foreground">
-          tree #{task.tree_id} · ~{task.estimated_minutes ?? 30} min · priority{" "}
-          {(task.effective_score ?? task.priority_score).toFixed(1)}
-          {task.required_resources.length > 0 &&
-            ` · ${task.required_resources.join(", ")}`}
-        </p>
+        <TaskMetaPills
+          treeSpecies={task.tree_species}
+          treeVariety={task.tree_variety}
+          treeId={task.tree_id}
+          category={task.template_category}
+          estimatedMinutes={task.estimated_minutes ?? 30}
+          overdue={task.escalated && !done}
+          lastCompleted={task.last_completed}
+          resources={task.required_resources}
+          priority={task.effective_score ?? task.priority_score}
+        />
       </div>
       <Button
         size="sm"
         variant={done ? "ghost" : "outline"}
-        className="ml-auto shrink-0"
+        className="shrink-0"
         disabled={done || busy}
         onClick={onComplete}
       >
