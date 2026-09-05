@@ -145,14 +145,19 @@ class IrrigationSupervisorService:
 
     @traced("irrigation.supervisor_run")
     async def run(
-        self, *, zone_ids: list[str] | None = None, on_date: date | None = None
+        self,
+        *,
+        zone_ids: list[str] | None = None,
+        on_date: date | None = None,
+        exclude_zone_ids: set[str] | None = None,
     ) -> SupervisorRunResult:
         on_date = on_date or demo.overlay_on_date() or date.today()
         sup_cfg = await self._config.get_supervisor()
         zone_cfgs = await self._config.all_zones()
         if zone_ids is None:
             zone_ids = demo.overlay_zone_ids() or await self._trees.distinct_zone_ids()
-        zones = zone_ids
+        skip = exclude_zone_ids or set()
+        zones = [z for z in zone_ids if z not in skip]
 
         out: list[SupervisorProposal] = []
         for zone_id in zones:

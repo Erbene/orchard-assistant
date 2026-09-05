@@ -168,7 +168,16 @@ export const zonesApi = {
       label: string | null;
       display_name: string;
       zone_number: number | null;
+      in_use: boolean;
     }>(`${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/label`, { label }),
+  setInUse: (zoneId: string, inUse: boolean) =>
+    apiClient.put<{
+      zone_id: string;
+      in_use: boolean;
+      label: string | null;
+      display_name: string;
+      zone_number: number | null;
+    }>(`${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/in-use`, { in_use: inUse }),
   water: (zoneId: string, durationMinutes: number) =>
     apiClient.post<{ status: string }>(
       `${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/water`,

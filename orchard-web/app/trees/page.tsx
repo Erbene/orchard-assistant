@@ -53,10 +53,12 @@ export default function TreesPage() {
       setZones(devices.flatMap((d) => d.zones));
       setZoneOptions(
         devices.flatMap((d) =>
-          d.zones.map((z) => ({
-            id: z.id,
-            label: `${d.name} · ${zoneDisplayName(z) ?? z.id}`,
-          })),
+          d.zones
+            .filter((z) => z.in_use !== false)
+            .map((z) => ({
+              id: z.id,
+              label: `${d.name} · ${zoneDisplayName(z) ?? z.id}`,
+            })),
         ),
       );
     } catch {

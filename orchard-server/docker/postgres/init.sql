@@ -32,6 +32,7 @@ $$ LANGUAGE plpgsql;
 CREATE TABLE IF NOT EXISTS zone (
     zone_id     TEXT PRIMARY KEY,
     label       TEXT,
+    in_use      BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -1,7 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { Droplet, ExternalLink, Info, Loader2, RefreshCw } from "lucide-react";
+import {
+  ChevronDown,
+  Droplet,
+  ExternalLink,
+  EyeOff,
+  Info,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -13,15 +22,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, zonesApi } from "@/lib/api";
-import type { RachioCustom, RachioDevice, RachioZone } from "@/lib/types";
+import type { RachioDevice, RachioZone } from "@/lib/types";
 import { zoneDisplayName } from "@/lib/zone-label";
 
 const RACHIO_APP_URL = "https://app.rach.io";
 
-function customName(c: RachioCustom | null): string {
-  return (c && typeof c.name === "string" && c.name) || "—";
+function patchZone(
+  devices: RachioDevice[],
+  zoneId: string,
+  patch: Partial<RachioZone>,
+): RachioDevice[] {
+  return devices.map((d) => ({
+    ...d,
+    zones: d.zones.map((z) => (z.id === zoneId ? { ...z, ...patch } : z)),
+  }));
 }
 
 export default function ZonesPage() {
@@ -50,14 +71,31 @@ export default function ZonesPage() {
     void refresh();
   }, [refresh]);
 
+  const activeDevices = React.useMemo(
+    () =>
+      devices
+        .map((d) => ({ ...d, zones: d.zones.filter((z) => z.in_use !== false) }))
+        .filter((d) => d.zones.length > 0),
+    [devices],
+  );
+  const unusedEntries = React.useMemo(
+    () =>
+      devices.flatMap((d) =>
+        d.zones
+          .filter((z) => z.in_use === false)
+          .map((zone) => ({ device: d, zone })),
+      ),
+    [devices],
+  );
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-start justify-between gap-4 border-b px-6 py-4">
         <div>
           <h1 className="text-lg font-semibold">Irrigation zones</h1>
           <p className="text-sm text-muted-foreground">
-            Live from your Rachio account. Add a local label — Rachio has no
-            equivalent field.
+            Live from your Rachio account. Add a local label, or mark a zone
+            not in use so it stays off planning.
           </p>
         </div>
         <Button
@@ -71,14 +109,12 @@ export default function ZonesPage() {
       </header>
 
       <div className="flex-1 space-y-4 overflow-auto p-6">
-        {/* read-only notice — zone config is edited only in the Rachio app */}
         <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <Info className="mt-0.5 size-4 shrink-0 text-primary" />
           <p className="text-muted-foreground">
-            Zone hardware settings (Rachio name, vegetation type, soil, nozzles,
-            slope, sun exposure) are{" "}
+            Zone hardware settings are{" "}
             <strong className="text-foreground">read-only</strong> here. To
-            change any of it, use the official{" "}
+            change them, use the official{" "}
             <a
               href={RACHIO_APP_URL}
               target="_blank"
@@ -87,7 +123,8 @@ export default function ZonesPage() {
             >
               Rachio app <ExternalLink className="size-3" />
             </a>
-            . The only action available here is a manual watering run.
+            . Unused zones do not appear in irrigation planning or tree
+            pickers.
           </p>
         </div>
 
@@ -114,117 +151,36 @@ export default function ZonesPage() {
             No Rachio devices found on this account.
           </p>
         ) : (
-          devices.map((device) => (
-            <section key={device.id} className="rounded-lg border">
-              <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
-                <div>
-                  <h2 className="font-medium">{device.name}</h2>
-                  <p className="text-xs text-muted-foreground">
-                    {device.model ?? "Rachio controller"}
-                  </p>
-                </div>
-                <Badge
-                  variant={device.status === "ONLINE" ? "success" : "muted"}
-                  className="uppercase"
-                >
-                  {device.status}
-                </Badge>
-              </div>
+          <>
+            {activeDevices.length === 0 ? (
+              <p className="rounded-md border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+                Every zone is marked not in use. Restore one below to bring it
+                back into planning.
+              </p>
+            ) : (
+              activeDevices.map((device) => (
+                <DeviceZoneTable
+                  key={device.id}
+                  device={device}
+                  unused={false}
+                  onPatch={(zoneId, patch) =>
+                    setDevices((prev) => patchZone(prev, zoneId, patch))
+                  }
+                  onWater={setWatering}
+                />
+              ))
+            )}
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-left text-xs text-muted-foreground">
-                    <tr className="[&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
-                      <th>#</th>
-                      <th>Label</th>
-                      <th>Rachio name</th>
-                      <th>Vegetation</th>
-                      <th>Soil</th>
-                      <th>Nozzle</th>
-                      <th>Slope</th>
-                      <th>Sun</th>
-                      <th className="text-right">Water</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {device.zones.map((zone) => (
-                      <tr
-                        key={zone.id}
-                        className="[&>td]:px-4 [&>td]:py-2 [&>td]:align-top"
-                      >
-                        <td className="tabular-nums text-muted-foreground">
-                          {zone.zone_number}
-                        </td>
-                        <td>
-                          <ZoneLabelEditor
-                            zone={zone}
-                            onSaved={(label, displayName) => {
-                              setDevices((prev) =>
-                                prev.map((d) =>
-                                  d.id !== device.id
-                                    ? d
-                                    : {
-                                        ...d,
-                                        zones: d.zones.map((z) =>
-                                          z.id === zone.id
-                                            ? {
-                                                ...z,
-                                                label,
-                                                display_name: displayName,
-                                              }
-                                            : z,
-                                        ),
-                                      },
-                                ),
-                              );
-                            }}
-                          />
-                        </td>
-                        <td>
-                          <span className="text-muted-foreground">{zone.name}</span>
-                          {!zone.enabled && (
-                            <Badge variant="muted" className="ml-2">
-                              disabled
-                            </Badge>
-                          )}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {customName(zone.custom_crop)}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {customName(zone.custom_soil)}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {customName(zone.custom_nozzle)}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {customName(zone.custom_slope)}
-                        </td>
-                        <td className="text-muted-foreground">
-                          {customName(zone.custom_shade)}
-                        </td>
-                        <td className="text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={!zone.enabled}
-                            title={
-                              zone.enabled
-                                ? "Start a manual watering run"
-                                : "Zone is disabled in Rachio"
-                            }
-                            onClick={() => setWatering(zone)}
-                          >
-                            <Droplet className="size-3.5" /> Water
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          ))
+            {unusedEntries.length > 0 && (
+              <UnusedZones
+                entries={unusedEntries}
+                onPatch={(zoneId, patch) =>
+                  setDevices((prev) => patchZone(prev, zoneId, patch))
+                }
+                onWater={setWatering}
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -237,6 +193,188 @@ export default function ZonesPage() {
         onError={(detail) => toast.error("Could not start watering", detail)}
       />
     </div>
+  );
+}
+
+function UnusedZones({
+  entries,
+  onPatch,
+  onWater,
+}: {
+  entries: { device: RachioDevice; zone: RachioZone }[];
+  onPatch: (zoneId: string, patch: Partial<RachioZone>) => void;
+  onWater: (zone: RachioZone) => void;
+}) {
+  const byDevice = React.useMemo(() => {
+    const map = new Map<string, { device: RachioDevice; zones: RachioZone[] }>();
+    for (const { device, zone } of entries) {
+      const row = map.get(device.id) ?? { device, zones: [] };
+      row.zones.push(zone);
+      map.set(device.id, row);
+    }
+    return [...map.values()];
+  }, [entries]);
+
+  return (
+    <Collapsible className="rounded-lg border">
+      <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-medium hover:bg-muted/40 [&[data-state=open]>svg]:rotate-180">
+        <span>
+          Unused zones
+          <span className="ml-2 text-muted-foreground">({entries.length})</span>
+        </span>
+        <ChevronDown className="size-4 text-muted-foreground transition-transform" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-3 border-t p-3">
+          {byDevice.map(({ device, zones }) => (
+            <DeviceZoneTable
+              key={device.id}
+              device={{ ...device, zones }}
+              unused
+              onPatch={onPatch}
+              onWater={onWater}
+            />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function DeviceZoneTable({
+  device,
+  unused,
+  onPatch,
+  onWater,
+}: {
+  device: RachioDevice;
+  unused: boolean;
+  onPatch: (zoneId: string, patch: Partial<RachioZone>) => void;
+  onWater: (zone: RachioZone) => void;
+}) {
+  return (
+    <section className="rounded-lg border">
+      <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
+        <div>
+          <h2 className="font-medium">{device.name}</h2>
+          <p className="text-xs text-muted-foreground">
+            {device.model ?? "Rachio controller"}
+          </p>
+        </div>
+        <Badge
+          variant={device.status === "ONLINE" ? "success" : "muted"}
+          className="uppercase"
+        >
+          {device.status}
+        </Badge>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-muted-foreground">
+            <tr className="[&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
+              <th>#</th>
+              <th>Label</th>
+              <th>Rachio name</th>
+              <th className="w-0 whitespace-nowrap">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {device.zones.map((zone) => (
+              <tr
+                key={zone.id}
+                className="[&>td]:px-4 [&>td]:py-2 [&>td]:align-middle"
+              >
+                <td className="tabular-nums text-muted-foreground">
+                  {zone.zone_number}
+                </td>
+                <td>
+                  <ZoneLabelEditor
+                    zone={zone}
+                    onSaved={(label, displayName) =>
+                      onPatch(zone.id, { label, display_name: displayName })
+                    }
+                  />
+                </td>
+                <td>
+                  <span className="text-muted-foreground">{zone.name}</span>
+                  {!zone.enabled && (
+                    <Badge variant="muted" className="ml-2">
+                      disabled
+                    </Badge>
+                  )}
+                </td>
+                <td className="w-0 whitespace-nowrap">
+                  <div className="flex justify-start gap-2">
+                    <InUseButton zone={zone} unused={unused} onPatch={onPatch} />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!zone.enabled}
+                      title={
+                        zone.enabled
+                          ? "Start a manual watering run"
+                          : "Zone is disabled in Rachio"
+                      }
+                      onClick={() => onWater(zone)}
+                    >
+                      <Droplet className="size-3.5" /> Water Now
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function InUseButton({
+  zone,
+  unused,
+  onPatch,
+}: {
+  zone: RachioZone;
+  unused: boolean;
+  onPatch: (zoneId: string, patch: Partial<RachioZone>) => void;
+}) {
+  const toast = useToast();
+  const [saving, setSaving] = React.useState(false);
+
+  async function toggle() {
+    const next = unused;
+    setSaving(true);
+    try {
+      const saved = await zonesApi.setInUse(zone.id, next);
+      onPatch(zone.id, { in_use: saved.in_use });
+    } catch (err) {
+      toast.error(
+        unused ? "Could not restore zone" : "Could not hide zone",
+        err instanceof ApiError ? err.detail : undefined,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={saving}
+      onClick={() => void toggle()}
+    >
+      {saving ? (
+        <Loader2 className="size-3.5 animate-spin" />
+      ) : unused ? (
+        <RotateCcw className="size-3.5" />
+      ) : (
+        <EyeOff className="size-3.5" />
+      )}
+      {unused ? "Use again" : "Not in use"}
+    </Button>
   );
 }
 
@@ -360,4 +498,3 @@ function ZoneLabelEditor({
     />
   );
 }
-

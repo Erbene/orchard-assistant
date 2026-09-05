@@ -26,6 +26,19 @@ class ZoneLabelRead(BaseModel):
     label: str | None = None
     display_name: str
     zone_number: int | None = None
+    in_use: bool = True
+
+
+class ZoneInUseUpdate(BaseModel):
+    in_use: bool
+
+
+class ZoneInUseRead(BaseModel):
+    zone_id: str
+    in_use: bool
+    label: str | None = None
+    display_name: str
+    zone_number: int | None = None
 
 
 class ZoneDetail(BaseModel):

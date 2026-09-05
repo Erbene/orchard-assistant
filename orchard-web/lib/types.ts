@@ -28,6 +28,8 @@ export interface RachioZone {
   label?: string | null;
   /** Label if set, otherwise `Zone {zone_number}`. */
   display_name?: string | null;
+  /** Local overlay: unused zones are hidden from planning surfaces. */
+  in_use?: boolean;
   [key: string]: unknown;
 }
 

@@ -7,12 +7,12 @@ sidebar links the main routes:
 | ----- | ---- |
 | `/assistant` (and `/`) | Grounded chat — SSE from the FastAPI Orchestrator + Ollama (not a stub). |
 | `/schedule` | Task inbox + Foreman JIT scheduling dialog (time budget → resources → plan). |
-| `/irrigation` | Supervisor HITL approval queue |
+| `/irrigation` | Irrigation planning — supervisor HITL approval queue |
 | `/irrigation/sensors` | Sensor readings; demo moisture/rain/last-watered pins when `ORCHARD_DEMO=true`. |
 | `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees` | Trees CRUD data table — search, sort, paginate, row actions, modal form. |
 | `/trees/[id]` | Tree detail with **Care Plan** tab (month strip, baseline wizard, template editing). |
-| `/zones` | Rachio zones — live list from the Rachio API plus an editable local label (fallback `Zone {n}`); manual water triggers a real Rachio run (bypasses irrigation HITL). |
+| `/zones` | Irrigation → Zones — live Rachio list, local labels, unused-zone hide; manual water is a real Rachio run (bypasses irrigation HITL). |
 | `/sources` | Knowledge-base sources: CRUD table + modal to upload a file or paste text. |
 
 `species` and `variety` are free-text inputs, stored exactly as typed by

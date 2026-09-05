@@ -94,7 +94,10 @@ async def run_supervisor(
     zones: ZoneService = Depends(get_zone_service),
 ):
     return await zones.enrich_run(
-        await svc.run(zone_ids=(payload.zone_ids if payload else None))
+        await svc.run(
+            zone_ids=(payload.zone_ids if payload else None),
+            exclude_zone_ids=await zones.unused_ids(),
+        )
     )
 
 

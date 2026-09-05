@@ -49,9 +49,10 @@ class RachioZone(BaseModel):
     custom_crop: dict[str, Any] | None = Field(default=None, alias="customCrop")
     custom_shade: dict[str, Any] | None = Field(default=None, alias="customShade")
     last_watered_date: date | None = Field(default=None, alias="lastWateredDate")
-    # Local overlay (not from Rachio): grower label and computed display name.
+    # Local overlay (not from Rachio): grower label, display name, in-use.
     label: str | None = None
     display_name: str | None = None
+    in_use: bool = True
 
     @field_validator("last_watered_date", mode="before")
     @classmethod

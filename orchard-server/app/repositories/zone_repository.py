@@ -1,7 +1,7 @@
-"""Raw persistence for the local ``zone`` overlay (grower labels).
+"""Raw persistence for the local ``zone`` overlay (labels + in-use).
 
-Rachio owns the irrigation zone itself; this table only stores an optional
-display label keyed by the Rachio zone id.
+Rachio owns the irrigation zone itself; this table stores an optional
+display label and whether the grower still uses the zone.
 """
 from __future__ import annotations
 
@@ -35,6 +35,12 @@ class ZoneRepository:
         )
         return {r["zone_id"]: r["label"] for r in result.mappings().all()}
 
+    async def unused_ids(self) -> set[str]:
+        result = await self._conn.execute(
+            text("SELECT zone_id FROM zone WHERE in_use IS FALSE")
+        )
+        return {r["zone_id"] for r in result.mappings().all()}
+
     async def upsert(self, zone_id: str, label: str | None) -> Row:
         result = await self._conn.execute(
             text(
@@ -44,5 +50,17 @@ class ZoneRepository:
                 " RETURNING *"
             ),
             {"zone_id": zone_id, "label": label},
+        )
+        return dict(result.mappings().one())
+
+    async def set_in_use(self, zone_id: str, in_use: bool) -> Row:
+        result = await self._conn.execute(
+            text(
+                "INSERT INTO zone (zone_id, in_use) VALUES (:zone_id, :in_use)"
+                " ON CONFLICT (zone_id) DO UPDATE SET"
+                " in_use = EXCLUDED.in_use, updated_at = now()"
+                " RETURNING *"
+            ),
+            {"zone_id": zone_id, "in_use": in_use},
         )
         return dict(result.mappings().one())

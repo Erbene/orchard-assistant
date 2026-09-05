@@ -206,11 +206,11 @@ Other demo presets (API): `rain-skip` (skip schedule after heavy QPF), `drought-
 | ----- | ------- |
 | `/assistant` | Grounded chat (Orchestrator + Ollama SSE) |
 | `/schedule` | Task inbox + Foreman JIT dialog |
-| `/irrigation` | Supervisor HITL approval queue |
+| `/irrigation` | Irrigation planning — supervisor HITL approval queue |
 | `/irrigation/sensors` | Sensor readings; demo moisture/rain pins when `ORCHARD_DEMO=true` |
 | `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees`, `/trees/[id]` | Tree CRUD, Care Plan tab, linked sources |
-| `/zones` | Rachio zones (live list + local labels; **manual water is a real Rachio write**) |
+| `/zones` | Irrigation → Zones (live list, local labels, unused hide; **manual water is a real Rachio write**) |
 | `/sources` | Knowledge-base upload, compose, and tree linking |
 
 MCP endpoint (when backend is running): `http://127.0.0.1:8000/mcp/sse`.

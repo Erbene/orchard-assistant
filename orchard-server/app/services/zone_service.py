@@ -1,7 +1,8 @@
-"""Local zone labels overlaid on Rachio zones.
+"""Local zone overlay: grower labels and in-use flags on Rachio zones.
 
 Display rule: grower ``label`` if set, otherwise ``Zone {rachio zone_number}``,
-otherwise ``Zone {zone_id}``.
+otherwise ``Zone {zone_id}``. Unused zones stay in the unused list on /zones
+and are omitted from planning, pickers, and supervision.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from ..schemas.irrigation import (
     ZoneConfig,
 )
 from ..schemas.tree import TreeRead
-from ..schemas.zone import ZoneLabelRead
+from ..schemas.zone import ZoneInUseRead, ZoneLabelRead
 from .exceptions import RachioError, RachioNotConfigured
 from .rachio import RachioDevice, RachioZone, get_rachio_service
 
@@ -40,6 +41,7 @@ def zone_display_name(
 class ZoneCatalog:
     labels: dict[str, str]
     numbers: dict[str, int]
+    unused: set[str]
 
     def label_for(self, zone_id: str) -> str | None:
         return self.labels.get(zone_id)
@@ -47,6 +49,9 @@ class ZoneCatalog:
     def number_for(self, zone_id: str) -> int | None:
         n = self.numbers.get(zone_id)
         return n if n else None
+
+    def in_use(self, zone_id: str) -> bool:
+        return zone_id not in self.unused
 
     def display(self, zone_id: str) -> str:
         return zone_display_name(
@@ -65,6 +70,7 @@ class ZoneService:
             self._catalog = ZoneCatalog(
                 labels=await self._zones.all_labels(),
                 numbers=await self._rachio_numbers(),
+                unused=await self._zones.unused_ids(),
             )
         return self._catalog
 
@@ -78,15 +84,33 @@ class ZoneService:
             label=cat.label_for(zone_id),
             display_name=cat.display(zone_id),
             zone_number=cat.number_for(zone_id),
+            in_use=cat.in_use(zone_id),
         )
+
+    async def set_in_use(self, zone_id: str, in_use: bool) -> ZoneInUseRead:
+        await self._zones.set_in_use(zone_id, in_use)
+        self._catalog = None
+        cat = await self.catalog()
+        return ZoneInUseRead(
+            zone_id=zone_id,
+            in_use=cat.in_use(zone_id),
+            label=cat.label_for(zone_id),
+            display_name=cat.display(zone_id),
+            zone_number=cat.number_for(zone_id),
+        )
+
+    async def unused_ids(self) -> set[str]:
+        return (await self.catalog()).unused
 
     async def overlay_devices(self, devices: list[RachioDevice]) -> list[RachioDevice]:
         labels = await self._zones.all_labels()
-        return [_overlay_device(d, labels) for d in devices]
+        unused = await self._zones.unused_ids()
+        return [_overlay_device(d, labels, unused) for d in devices]
 
     async def overlay_zone(self, zone: RachioZone) -> RachioZone:
         labels = await self._zones.all_labels()
-        return _overlay_rachio_zone(zone, labels)
+        unused = await self._zones.unused_ids()
+        return _overlay_rachio_zone(zone, labels, unused)
 
     async def enrich_trees(self, trees: list[TreeRead]) -> list[TreeRead]:
         cat = await self.catalog()
@@ -102,13 +126,25 @@ class ZoneService:
     async def enrich_overview(self, overview: IrrigationOverview) -> IrrigationOverview:
         cat = await self.catalog()
         return overview.model_copy(
-            update={"zones": [_enrich_zone_config(z, cat) for z in overview.zones]}
+            update={
+                "zones": [
+                    _enrich_zone_config(z, cat)
+                    for z in overview.zones
+                    if cat.in_use(z.zone_id)
+                ]
+            }
         )
 
     async def enrich_snapshot(self, snap: SensorSnapshot) -> SensorSnapshot:
         cat = await self.catalog()
         return snap.model_copy(
-            update={"zones": [_enrich_sensor_zone(z, cat) for z in snap.zones]}
+            update={
+                "zones": [
+                    _enrich_sensor_zone(z, cat)
+                    for z in snap.zones
+                    if cat.in_use(z.zone_id)
+                ]
+            }
         )
 
     async def enrich_proposal(self, proposal: SupervisorProposal) -> SupervisorProposal:
@@ -135,19 +171,24 @@ class ZoneService:
         return {z.id: z.zone_number for d in devices for z in d.zones if z.zone_number}
 
 
-def _overlay_rachio_zone(zone: RachioZone, labels: dict[str, str]) -> RachioZone:
+def _overlay_rachio_zone(
+    zone: RachioZone, labels: dict[str, str], unused: set[str]
+) -> RachioZone:
     label = labels.get(zone.id)
     return zone.model_copy(
         update={
             "label": label,
             "display_name": zone_display_name(label, zone.zone_number, zone.id),
+            "in_use": zone.id not in unused,
         }
     )
 
 
-def _overlay_device(device: RachioDevice, labels: dict[str, str]) -> RachioDevice:
+def _overlay_device(
+    device: RachioDevice, labels: dict[str, str], unused: set[str]
+) -> RachioDevice:
     return device.model_copy(
-        update={"zones": [_overlay_rachio_zone(z, labels) for z in device.zones]}
+        update={"zones": [_overlay_rachio_zone(z, labels, unused) for z in device.zones]}
     )
 
 

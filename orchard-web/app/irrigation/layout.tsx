@@ -64,7 +64,7 @@ export default function IrrigationLayout({
         <header className="flex flex-wrap items-center gap-3 border-b px-6 py-4">
           <div className="flex-1">
             <h1 className="flex items-center gap-2 text-lg font-semibold">
-              <Droplets className="size-5" /> Irrigation
+              <Droplets className="size-5" /> Irrigation planning
             </h1>
             <p className="text-sm text-muted-foreground">
               The supervisor intercepts the baseline Rachio schedule to save

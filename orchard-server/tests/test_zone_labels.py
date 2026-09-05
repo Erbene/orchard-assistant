@@ -99,3 +99,23 @@ def test_set_label_overlays_everywhere(rachio_client):
     assert cleared.status_code == 200
     assert cleared.json()["label"] is None
     assert cleared.json()["display_name"] == "Zone 1"
+
+
+@respx.mock
+def test_unused_zone_stays_listed_but_flagged(rachio_client):
+    _mock_rachio()
+    marked = rachio_client.put(f"{API}/zones/rz-1/in-use", json={"in_use": False})
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["in_use"] is False
+
+    devices = rachio_client.get(f"{API}/zones").json()
+    z1 = next(z for z in devices[0]["zones"] if z["id"] == "rz-1")
+    z2 = next(z for z in devices[0]["zones"] if z["id"] == "rz-2")
+    assert z1["in_use"] is False
+    assert z2["in_use"] is True
+
+    restored = rachio_client.put(f"{API}/zones/rz-1/in-use", json={"in_use": True})
+    assert restored.json()["in_use"] is True
+    devices = rachio_client.get(f"{API}/zones").json()
+    z1 = next(z for z in devices[0]["zones"] if z["id"] == "rz-1")
+    assert z1["in_use"] is True

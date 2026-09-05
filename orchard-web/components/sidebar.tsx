@@ -14,19 +14,34 @@ import {
   PanelLeft,
   PanelLeftClose,
   Sprout,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
-const NAV = [
+type NavLeaf = { href: string; label: string; icon: LucideIcon };
+type NavGroup = { label: string; icon: LucideIcon; children: readonly NavLeaf[] };
+type NavEntry = NavLeaf | NavGroup;
+
+function isGroup(item: NavEntry): item is NavGroup {
+  return "children" in item;
+}
+
+const NAV: readonly NavEntry[] = [
   { href: "/assistant", label: "Assistant", icon: Bot },
   { href: "/schedule", label: "Schedule", icon: CalendarClock },
-  { href: "/irrigation", label: "Irrigation", icon: Droplets },
+  {
+    label: "Irrigation",
+    icon: Droplets,
+    children: [
+      { href: "/irrigation", label: "Irrigation planning", icon: Droplets },
+      { href: "/zones", label: "Zones", icon: MapPin },
+    ],
+  },
   { href: "/trees", label: "Trees", icon: Trees },
-  { href: "/zones", label: "Zones", icon: MapPin },
   { href: "/sources", label: "Sources", icon: Library },
-] as const;
+];
 
 const STORAGE_KEY = "orchard.sidebar.collapsed";
 
@@ -41,6 +56,44 @@ function useIsActive() {
   );
 }
 
+function NavLink({
+  href,
+  label,
+  icon: Icon,
+  collapsed,
+  indent,
+  onNavigate,
+}: {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  collapsed?: boolean;
+  indent?: boolean;
+  onNavigate?: () => void;
+}) {
+  const isActive = useIsActive();
+  const active = isActive(href);
+  return (
+    <Link
+      href={href}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
+      title={collapsed ? label : undefined}
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+        collapsed && "justify-center px-2",
+        indent && !collapsed && "pl-9",
+      )}
+    >
+      <Icon className="size-4 shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
+    </Link>
+  );
+}
+
 function NavLinks({
   collapsed,
   onNavigate,
@@ -48,29 +101,41 @@ function NavLinks({
   collapsed?: boolean;
   onNavigate?: () => void;
 }) {
-  const isActive = useIsActive();
   return (
     <nav className="flex flex-col gap-1">
-      {NAV.map(({ href, label, icon: Icon }) => {
-        const active = isActive(href);
+      {NAV.map((item) => {
+        if (!isGroup(item)) {
+          return (
+            <NavLink
+              key={item.href}
+              href={item.href}
+              label={item.label}
+              icon={item.icon}
+              collapsed={collapsed}
+              onNavigate={onNavigate}
+            />
+          );
+        }
         return (
-          <Link
-            key={href}
-            href={href}
-            onClick={onNavigate}
-            aria-current={active ? "page" : undefined}
-            title={collapsed ? label : undefined}
-            className={cn(
-              "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              active
-                ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
-              collapsed && "justify-center px-2",
+          <div key={item.label} className="flex flex-col gap-0.5">
+            {!collapsed && (
+              <div className="flex items-center gap-3 px-3 pb-0.5 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <item.icon className="size-3.5 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </div>
             )}
-          >
-            <Icon className="size-4 shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
-          </Link>
+            {item.children.map((child) => (
+              <NavLink
+                key={child.href}
+                href={child.href}
+                label={child.label}
+                icon={child.icon}
+                collapsed={collapsed}
+                indent
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
         );
       })}
     </nav>
