@@ -16,13 +16,13 @@ from collections.abc import Sequence
 from typing import Literal, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field, field_validator
 
 from ..schemas.tree import _normalize_month_list
 
 from ..config import Settings
 from ..core.logging import get_logger
+from .ollama import chat_model
 from ..core.tracing import traced
 from .care_plan import CATEGORIES, scale
 from ..services.exceptions import LLMUnavailable
@@ -118,11 +118,11 @@ async def run_agronomist(
             "(No linked knowledge-base passages matched this question.)\n\n" + context
         )
 
-    llm = ChatOllama(
+    llm = chat_model(
+        settings,
         model=settings.agronomist_model,
-        base_url=settings.ollama_base_url,
         temperature=0.2,
-        client_kwargs={"timeout": 90.0},  # a 14B model on CPU is slow
+        timeout=90.0,  # a 14B model on CPU is slow
     )
     try:
         msg = await llm.ainvoke(
@@ -270,7 +270,7 @@ async def generate_care_plan(
     sources: SourceService,
     settings: Settings,
 ) -> CarePlanDraft:
-    """Ask the router-grade model (`AGENT_MODEL`) for a recurring task list for
+    """Ask the care-plan model (`CARE_PLAN_MODEL`, falling back to `AGENT_MODEL`) for a recurring task list for
     ``tree``, then scale each item to the tree's canopy size deterministically
     (``app.agent.care_plan``). ``tree`` is a row dict with ``tree_id``,
     ``species``, ``variety``, ``height_m``, ``canopy_spread_m``."""
@@ -295,11 +295,11 @@ async def generate_care_plan(
         f"Canopy spread: {spread if spread is not None else 'not recorded'} m."
     )
 
-    llm = ChatOllama(
-        model=settings.agent_model,
-        base_url=settings.ollama_base_url,
+    llm = chat_model(
+        settings,
+        model=settings.care_plan_model,
         temperature=0.1,
-        client_kwargs={"timeout": 90.0},
+        timeout=90.0,
     ).with_structured_output(_CarePlanModel)
     try:
         plan: _CarePlanModel = await llm.ainvoke(

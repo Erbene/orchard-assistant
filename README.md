@@ -231,7 +231,7 @@ Eval harness details: **[orchard-server/eval/README.md](orchard-server/eval/READ
 | Chat + schedule overlap (Sept 2 baseline set) | **36/36** | `orchard-server/eval/baselines/2026-09-02-full-7b.json` |
 | Irrigation | **12/12** | Prior 11/11 plus `irr-12-two-day-gap` |
 
-Irrigation **AI judge is parked** (~3/12 on a recent run — advisory, not a ship gate). **7B vs 14B agronomist:** no quality gain on the eval set; 14B ~20× slower on CPU — see the server README eval log.
+Irrigation **AI judge is parked** (advisory, not a ship gate). **2026-09-05 role benchmark** (Ryzen 9 5950X + RTX 3070 Ti): Qwen2.5 7B is the production model for every agent. It was the only candidate to pass every exact role suite; 14B, Qwen3 8B, and Gemma 3 4B added regressions or latency without a quality gain. GPU production suite: **49/49 exact**, `100% GPU`, 110 s agent time. See `orchard-server/eval/baselines/2026-09-05-role-benchmark.md`.
 
 ---
 

@@ -36,8 +36,8 @@ def fake_llm(route: str, *, task_ids=None, reply="", answer="Per SOURCE 1, apply
     orch.with_structured_output = MagicMock(return_value=structured)
     agro = MagicMock()
     agro.ainvoke = AsyncMock(return_value=MagicMock(content=answer))
-    with patch("app.agent.orchestrator.ChatOllama", return_value=orch), \
-         patch("app.agent.agronomist.ChatOllama", return_value=agro), \
+    with patch("app.agent.orchestrator.chat_model", return_value=orch), \
+         patch("app.agent.agronomist.chat_model", return_value=agro), \
          patch("app.api.routes.chat._require_ollama", new=AsyncMock()):
         yield
 

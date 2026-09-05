@@ -1,0 +1,93 @@
+{
+  "title": "2026-09-05 Ollama GPU/CPU per-agent model benchmark",
+  "hardware": {
+    "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+    "physical_cores": 16,
+    "logical_threads": 32,
+    "memory_gib": 63.9,
+    "gpu": "NVIDIA GeForce RTX 3070 Ti, 8192"
+  },
+  "grader": {
+    "judge_model": "qwen2.5:7b-instruct",
+    "grounding_model": "qwen2.5:7b-instruct",
+    "note": "Graders stayed fixed while subject models changed."
+  },
+  "cpu_thread_probe": {
+    "scenario": "chat-schedule-01-plan-my-day",
+    "num_gpu": 0,
+    "warm_then_probe_agent_ms": {
+      "16": {"warm": 26400.0, "probe": 11460.9},
+      "32": {"warm": 23007.8, "probe": 9641.9}
+    },
+    "selected_num_thread": 32,
+    "ollama_ps": "100% CPU"
+  },
+  "gpu_matrix_exact": {
+    "orchestrator": {
+      "qwen2.5:7b-instruct": {"exact": "25/25", "agent_s": 115.8},
+      "qwen2.5:14b": {"exact": "25/25", "agent_s": 454.1},
+      "qwen3:8b": {"exact": "24/25", "agent_s": 153.4, "note": "one transport/parse error"},
+      "gemma3:4b": {"exact": "23/25", "agent_s": 135.7}
+    },
+    "agronomist": {
+      "qwen2.5:7b-instruct": {"exact": "6/6", "agent_s": 50.2},
+      "qwen2.5:14b": {"exact": "6/6", "agent_s": 718.3},
+      "qwen3:8b": {"exact": "6/6", "agent_s": 83.0},
+      "gemma3:4b": {"exact": "6/6", "agent_s": 86.6}
+    },
+    "care_plan": {
+      "qwen2.5:7b-instruct": {"exact": "2/2", "agent_s": 58.5},
+      "qwen2.5:14b": {"exact": "2/2", "agent_s": 747.6},
+      "qwen3:8b": {"exact": "1/2", "agent_s": 47.5, "note": "structured JSON parse failure"},
+      "gemma3:4b": {"exact": "2/2", "agent_s": 20.8}
+    },
+    "foreman": {
+      "qwen2.5:7b-instruct": {"exact": "12/12", "agent_s": 25.0, "note": "valid override after graph injection fix"},
+      "qwen2.5:14b": {"exact": "12/12", "agent_s": 248.1},
+      "qwen3:8b": {"exact": "12/12", "agent_s": 52.3},
+      "gemma3:4b": {"exact": "12/12", "agent_s": 25.9}
+    },
+    "irrigation": {
+      "qwen2.5:7b-instruct": {"exact": "12/12", "agent_s": 34.9},
+      "qwen2.5:14b": {"exact": "11/12", "agent_s": 284.7},
+      "qwen3:8b": {"exact": "10/12", "agent_s": 185.1},
+      "gemma3:4b": {"exact": "10/12", "agent_s": 45.3}
+    }
+  },
+  "quality_gpu": {
+    "agronomist": {
+      "qwen2.5:7b-instruct": {"exact": "6/6", "judge": "6/6", "grounded": "21/22", "agent_s": 26.8},
+      "qwen2.5:14b": {"exact": "6/6", "judge": "5/6", "grounded": "10/10", "agent_s": 209.5},
+      "qwen3:8b": {"exact": "6/6", "judge": "6/6", "grounded": "15/15", "agent_s": 60.7},
+      "gemma3:4b": {"exact": "6/6", "judge": "6/6", "grounded": "14/14", "agent_s": 46.7}
+    }
+  },
+  "production": {
+    "gpu": {
+      "run_label": "production-qwen25-7b-gpu",
+      "models": "qwen2.5:7b-instruct for every role",
+      "exact": "49/49",
+      "judge": "29/38",
+      "grounded": "21/21",
+      "agent_s": 110.2,
+      "ollama_ps": "100% GPU"
+    },
+    "cpu32": {
+      "run_label": "production-qwen25-7b-cpu32",
+      "models": "qwen2.5:7b-instruct for every role",
+      "exact": "49/49",
+      "judge": "skipped",
+      "grounded": "skipped",
+      "agent_s": 1176.6,
+      "ollama_ps": "100% CPU"
+    }
+  },
+  "assignment": {
+    "orchestrator": "qwen2.5:7b-instruct",
+    "agronomist": "qwen2.5:7b-instruct",
+    "care_plan": "qwen2.5:7b-instruct",
+    "foreman": "qwen2.5:7b-instruct",
+    "irrigation": "qwen2.5:7b-instruct",
+    "reason": "Only Qwen2.5 7B passed every exact role suite. Larger or newer alternatives added regressions or latency without a quality gain that justified a switch."
+  }
+}

@@ -21,6 +21,7 @@ from app.agent.checkpointer import (
     ensure_foreman_graph,
     ensure_irrigation_graph,
 )
+from app.agent.agronomist import generate_care_plan
 from app.agent.graph import build_graph
 from app.config import Settings, get_settings
 from app.core import db
@@ -70,6 +71,12 @@ def eval_settings(**overrides: Any) -> Settings:
         "irrigation_target_vwc": 25.0,
         "agent_model": "qwen2.5:7b-instruct",
         "agronomist_model": "qwen2.5:7b-instruct",
+        "care_plan_model": "qwen2.5:7b-instruct",
+        "foreman_model": "qwen2.5:7b-instruct",
+        "irrigation_model": "qwen2.5:7b-instruct",
+        # Graders stay fixed when subject models are overridden.
+        "judge_model": "qwen2.5:7b-instruct",
+        "grounding_model": "qwen2.5:7b-instruct",
     }
     base.update(overrides)
     return Settings(**base)
@@ -307,6 +314,34 @@ async def run_chat(settings: Settings, messages: list[dict[str, str]]) -> dict[s
     }
 
 
+async def run_care_plan_fixture(
+    settings: Settings, tree: dict[str, Any], source_text: str
+) -> dict[str, Any]:
+    """Run care-plan structured extraction against a fixed in-memory source."""
+
+    class _FixtureSources:
+        async def allowed_source_ids(self, tree_id: int) -> list[int]:
+            return [1]
+
+        async def search(
+            self, query: str, *, source_ids: list[int] | None = None
+        ) -> list[dict[str, Any]]:
+            return [
+                {
+                    "source_id": 1,
+                    "name": "benchmark care guide",
+                    "rank": 1,
+                    "chunks": [source_text],
+                }
+            ]
+
+    return await generate_care_plan(
+        tree=tree,
+        sources=_FixtureSources(),  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+
 async def run_schedule(
     settings: Settings, row: dict[str, Any], task_ids: dict[str, int]
 ) -> dict[str, Any]:
@@ -361,9 +396,9 @@ def _dead_ollama_patch() -> Any:
     The Postgres-checkpointed graph is built once and cached by
     ``(kind, dsn)`` (``app.agent.checkpointer``) - not by ``ollama_base_url``
     - so an ``eval_settings(ollama_base_url=...)`` override would silently be
-    ignored by an already-built graph. ``ChatOllama`` is constructed fresh
-    inside ``_deliberate`` on every graph invocation though, so patching the
-    imported name (mirroring ``tests/test_irrigation_supervisor.py``'s
+    ignored by an already-built graph. The shared Ollama client is constructed
+    fresh inside ``_deliberate`` on every graph invocation though, so patching
+    the imported name (mirroring ``tests/test_irrigation_supervisor.py``'s
     ``fake_llm(down=True)``) reliably fails just this one call regardless of
     when the graph was compiled.
     """
@@ -374,7 +409,7 @@ def _dead_ollama_patch() -> Any:
         side_effect=RuntimeError("eval: ollama unreachable")
     )
     dead.invoke = MagicMock(side_effect=RuntimeError("eval: ollama unreachable"))
-    return patch("app.agent.irrigation_supervisor.ChatOllama", return_value=dead)
+    return patch("app.agent.irrigation_supervisor.chat_model", return_value=dead)
 
 
 async def run_irrigation(settings: Settings, row: dict[str, Any]) -> dict[str, Any]:

@@ -18,6 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from ..irrigation.water_score import credited_forecast_mm
+
 from ..core.tracing import traced
 
 GAL_TO_L: float = 3.78541
@@ -162,7 +164,7 @@ def simulate_post_vwc(
         # pulsed delivery infiltrates rather than ponding -> smaller effective spike
         d_irrig *= 1.0 - 0.10 * min(candidate.pulses - 1, 3)
 
-    d_rain = _delta_vwc(rain_24h_mm + forecast_rain_24h_mm)
+    d_rain = _delta_vwc(rain_24h_mm + credited_forecast_mm(forecast_rain_24h_mm))
     et_vwc = _delta_vwc(prof.et_mm_day)
 
     start = (

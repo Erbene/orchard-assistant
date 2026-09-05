@@ -214,8 +214,9 @@ demos and on-demand runs.
 
 - **[app/services/water_balance.py](app/services/water_balance.py)** — the
   *deterministic* sensor-fusion pre-processing. Per tree:
-  `deficit_score = (target_vwc − current_vwc) − rain_24h_mm − forecast_rain_24h_mm`
-  (higher = drier). `target_vwc` is **growth-stage aware**
+  `deficit_score = (target_vwc − current_vwc) − rain_24h_mm − 0.3 × forecast_rain_24h_mm`
+  (higher = drier; forecast rain is discounted because QPF is often wrong).
+  `target_vwc` is **growth-stage aware**
   ([app/irrigation/phenology.py](app/irrigation/phenology.py) — a coarse
   month→stage map, stopgap for the parked biological-calendar brief).
   `for_zone` aggregates to `max` deficit (protect the driest tree). The LLM
@@ -367,8 +368,8 @@ time_check --(interrupt: available_minutes)--> propose --> resource_check
   union of `required_resources` is asked about, and tasks needing a missing
   tool are dropped + the freed time backfilled. **No node writes the DB.**
 - **Narration**: a local **Ollama** model (`FOREMAN_MODEL`, default
-  `qwen2.5:14b`) writes the session summary. Optional — falls back to a
-  template when Ollama is unreachable (`ollama serve && ollama pull qwen2.5:14b`).
+  `qwen2.5:7b-instruct`) writes the session summary. Optional — falls back to a
+  template when Ollama is unreachable.
 - **Sessions** persist to Postgres (`langgraph-checkpoint-postgres`,
   `checkpoints*` tables) keyed by `thread_id`, resumable after a restart. The
   graph is *synchronous* (async psycopg can't run on Windows' Proactor loop)
@@ -495,16 +496,20 @@ tools return `503` / a tool error and everything else works normally.
 | --- | --- | --- | --- |
 | `AGENT_MODEL` | router / classifier (short structured output) | `qwen2.5:7b-instruct` | **yes** |
 | `AGRONOMIST_MODEL` | grounded Q&A over retrieved notes | *falls back to `AGENT_MODEL`* | no |
-| `FOREMAN_MODEL` | JIT session summary | `qwen2.5:14b` | no — templated fallback |
+| `CARE_PLAN_MODEL` | structured recurring care-plan draft | *falls back to `AGENT_MODEL`* | no |
+| `FOREMAN_MODEL` | JIT session summary | *falls back to `AGENT_MODEL`* | no — templated fallback |
+| `IRRIGATION_MODEL` | irrigation action + summary | *falls back to `AGENT_MODEL`* | no |
+| `OLLAMA_NUM_GPU` | GPU layers (`0` = CPU, `999` = max offload) | *Ollama default* | no |
+| `OLLAMA_NUM_THREAD` | CPU inference threads | *Ollama default* | no |
 
 `OLLAMA_BASE_URL` defaults to `http://localhost:11434` (bare-metal) /
 `http://host.docker.internal:11434` (compose). Boot logs `ollama.models.missing`
-if a configured model isn't pulled.
+if a configured model isn't pulled. `./dev.ps1 -Gpu` sets `OLLAMA_NUM_GPU=999`;
+`-Cpu` forces `OLLAMA_NUM_GPU=0`.
 
 ```sh
 ollama serve
-ollama pull qwen2.5:7b-instruct     # required for chat
-ollama pull qwen2.5:14b             # optional: Foreman narration, or a stronger AGRONOMIST_MODEL
+ollama pull qwen2.5:7b-instruct     # required for every live agent role
 ```
 
 Why each model was chosen — with the eval numbers behind it, and when to
@@ -562,37 +567,40 @@ cd orchard-server
 ./.venv/Scripts/python -m eval --id chat-refuse-01-toxic-mix
 ```
 
-`eval/dataset.jsonl` (~46 scenarios) drives the real Orchestrator graph
+`eval/dataset.jsonl` (49 scenarios) drives the real Orchestrator graph
 (routing / retrieval / Agronomist), the real Foreman negotiation, and the real
 irrigation supervisor (`--only irrigation` — decision / HITL / solver duration
 for a seeded zone, with the stub moisture + NWS forecast pinned per scenario)
-against a disposable `orchard_eval` DB. Grading = deterministic checks (route,
-tool + args, interrupt `step` sequence, escalation, "no DB write until an
-explicit completion", irrigation action / HITL / duration bounds) plus a
-`qwen2.5:7b` **AI judge** for free-text answer quality. For the 5
-`chat-agronomy-*` rows, `eval/grounding.py` additionally checks whether the
-Agronomist's answer is grounded in what it retrieved (citation validity +
-per-claim `supported` / `general_knowledge` / `unsupported` verdicts) —
-advisory only, same as the judge. Results land in
+against a disposable `orchard_eval` DB. CLI flags pin subject models, GPU/CPU
+placement, and thread count; judge and grounding models stay fixed unless
+overridden. Grading = deterministic checks (route, tool + args, interrupt
+`step` sequence, escalation, "no DB write until an explicit completion",
+irrigation action / HITL / duration bounds) plus a `qwen2.5:7b` **AI judge**
+for free-text answer quality. For agronomy chat rows, `eval/grounding.py`
+additionally checks whether the Agronomist's answer is grounded in what it
+retrieved (citation validity + per-claim `supported` / `general_knowledge` /
+`unsupported` verdicts) — advisory only, same as the judge. Results land in
 `eval/results/` (git-ignored). Non-zero exit below the bar.
 See [eval/README.md](eval/README.md).
 
 ### Model & prompt decisions — eval findings
 
 A **living log** of why each agent uses the model / prompt it does, with the
-numbers behind each call. The dataset is small (~36 rows) and CPU-only on one
-dev machine, so these are decisions *for the current scope*, not permanent.
-**Revisit any row when a revisit trigger below fires** — re-run `python -m eval`
-and compare. Named snapshots referenced here are kept in
-[eval/baselines/](eval/baselines/) (tracked); ad-hoc runs go to
-`eval/results/` (git-ignored).
+numbers behind each call. The dataset is 49 rows on one workstation
+(Ryzen 9 5950X, 64 GB RAM, RTX 3070 Ti), so these are decisions *for the
+current scope*, not permanent. **Revisit any row when a revisit trigger
+below fires** — re-run `python -m eval` and compare. Named snapshots
+referenced here are kept in [eval/baselines/](eval/baselines/) (tracked);
+ad-hoc runs go to `eval/results/` (git-ignored).
 
 | Component | Choice | Evidence (date) | Revisit when |
 | --- | --- | --- | --- |
-| Orchestrator **router** (`AGENT_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-02: 9/9 live golden routes; **36/36** eval exact after prompt fixes; `.with_structured_output` reliable; ~1–2 s/call | routes added/changed; sustained misroutes on new dataset rows; a smaller model tests equal |
-| **Agronomist** (`AGRONOMIST_MODEL`) | `qwen2.5:7b-instruct` (= router; knob exists to override) | 2026-09-02: 7B vs `qwen2.5:14b` = **5/5 vs 5/5** exact+judge, no quality gain, **~45 s vs ~2 s** per answer on CPU, +9 GB resident | dataset gains harder agronomy rows (multi-source conflicts, dosing math, diagnosis chains); a GPU is available; judge scores on agronomy rows drop |
-| **Foreman narration** (`FOREMAN_MODEL`) | `qwen2.5:14b`, optional | engine is deterministic Python; narration is prose-only and templated when the model is absent | narration quality becomes user-visible priority; GPU available |
-| **AI judge** (eval only) | `qwen2.5:7b-instruct` | 2026-09-02: produced ≥1 clearly-wrong verdict at baseline → **advisory only**, exact checks are the gate | judge noise blocks reading real regressions; a bigger judge tests meaningfully steadier |
+| Orchestrator **router** (`AGENT_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-05 GPU matrix: **25/25** exact vs 25/25 (14B), 24/25 (Qwen3 8B), 23/25 (Gemma 3 4B); 116 s vs 454 s for 14B | routes added/changed; a smaller model matches 25/25 |
+| **Agronomist** (`AGRONOMIST_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-05: **6/6** exact; fixed-judge **6/6** vs 5/6 for 14B; 50 s vs 718 s on GPU | harder multi-source agronomy rows; judge/grounding drop |
+| **Care-plan draft** (`CARE_PLAN_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-05: **2/2** structured fixtures; Qwen3 8B failed JSON parse on one fixture; 14B 13× slower | schema changes; a smaller model stays reliable |
+| **Foreman narration** (`FOREMAN_MODEL`) | `qwen2.5:7b-instruct`, optional | 2026-09-05: **12/12** exact (deterministic packer); 7B summaries usable at 25 s vs 248 s for 14B. Template fallback remains | narration quality becomes a hard product requirement |
+| **Irrigation Supervisor** (`IRRIGATION_MODEL`) | `qwen2.5:7b-instruct` | 2026-09-05: **12/12** exact; 14B 11/12, Qwen3/Gemma 10/12 | irrigation exact checks regress |
+| **AI judge / grounding** (eval only) | `qwen2.5:7b-instruct` | Held fixed across candidate runs. Production GPU suite: judge **29/38**, grounded **21/21**. Advisory only | judge noise blocks reading real regressions |
 
 **Log:**
 
@@ -625,6 +633,17 @@ and compare. Named snapshots referenced here are kept in
   costs ~20× latency. Kept 7B; `AGRONOMIST_MODEL` retained as a documented knob.
   Snapshots: `eval/baselines/2026-09-02-full-7b.json` (full 36-row 7B run),
   `eval/baselines/2026-09-02-agronomy-14b.json` (5 agronomy rows on 14B).
+- **2026-09-05 — GPU offload and per-agent model matrix.** Ollama requests now
+  carry explicit `num_gpu` / `num_thread`. On this workstation a warmed
+  32-thread CPU probe beat 16 cores (9.6 s vs 11.5 s); 7B GPU runs report
+  `100% GPU` on the RTX 3070 Ti. Compared Qwen2.5 7B/14B, Qwen3 8B, and
+  Gemma 3 4B by role. Only 7B passed every exact suite. 14B added no quality
+  gain (agronomy judge 5/6 vs 6/6) and failed `irr-03`. Qwen3 and Gemma
+  regressed routing or irrigation. Foreman therefore dropped its 14B default
+  and now falls back to `AGENT_MODEL`. Production GPU suite:
+  **49/49 exact**, judge 29/38, grounded 21/21, agent 110 s.
+  CPU-32 confirmation: **49/49 exact**, `100% CPU`, agent 1177 s.
+  Snapshot: `eval/baselines/2026-09-05-role-benchmark.md`.
 - **2026-09-03 — irrigation eval channel added (baseline).** 10 `irrigation`
   scenarios drive the real supervisor. **10/10 exact** (routing / HITL / solver
   bounds all correct); **judge 3/10** — advisory, but the failures are real

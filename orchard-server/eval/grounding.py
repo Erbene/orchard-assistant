@@ -46,10 +46,10 @@ import re
 from typing import Literal, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
 from app.agent.agronomist import format_priority_context
+from app.agent.ollama import chat_model
 from app.config import Settings
 from app.services.source_service import FusedSource
 
@@ -122,11 +122,11 @@ _VERIFY_SYSTEM = (
 
 
 def _client(settings: Settings, schema: type[BaseModel]):
-    return ChatOllama(
-        model=settings.agent_model,
-        base_url=settings.ollama_base_url,
+    return chat_model(
+        settings,
+        model=settings.grounding_model,
         temperature=0.0,
-        client_kwargs={"timeout": 60.0},
+        timeout=60.0,
     ).with_structured_output(schema)
 
 

@@ -52,7 +52,7 @@ the 2-day spacing rule from Rachio `lastWateredDate`.
 | ---- | ---- |
 | [care_plan.py](care_plan.py) | Canopy-volume scaler for care-plan templates |
 | [schedule_solver.py](schedule_solver.py) | Biological calendar dates (`valid_months`, anchors, phenology) |
-| [ollama.py](ollama.py) | Shared Ollama client helpers |
+| [ollama.py](ollama.py) | Shared `chat_model()` helper (num_gpu / num_thread / keep_alive) |
 | [client.py](client.py) | MCP tool binding for agent clients |
 
 RAG is Chroma retrieval with `priority_order` source headers — not four-tier

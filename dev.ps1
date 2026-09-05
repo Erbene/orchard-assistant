@@ -12,12 +12,21 @@
 # `ollama serve` (this script warns but does not start Ollama).
 #
 #   Usage:  ./dev.ps1
-#           ./dev.ps1 -Demo
+#           ./dev.ps1 -Gpu       # request maximum GPU layer offload
+#           ./dev.ps1 -Cpu       # force CPU-only inference
+#           ./dev.ps1 -Demo -Gpu
 param(
-    [switch]$Demo
+    [switch]$Demo,
+    [switch]$Gpu,
+    [switch]$Cpu
 )
 
 $ErrorActionPreference = "Stop"
+if ($Gpu -and $Cpu) {
+    throw "Choose one Ollama execution profile: -Gpu or -Cpu."
+}
+if ($Gpu) { $env:OLLAMA_NUM_GPU = "999" }
+if ($Cpu) { $env:OLLAMA_NUM_GPU = "0" }
 $root     = $PSScriptRoot
 $backend  = Join-Path $root "orchard-server"
 $frontend = Join-Path $root "orchard-web"
@@ -95,7 +104,8 @@ print(
     f"db={s.postgres_db}{sep}{s.postgres_host}:{s.postgres_port} "
     f"chroma={s.chroma_host}:{s.chroma_port} "
     f"rachio={s.rachio_enabled} demo={s.orchard_demo} "
-    f"ollama={s.ollama_base_url} tracing={tr}"
+    f"ollama={s.ollama_base_url} gpu_layers={s.ollama_num_gpu} "
+    f"threads={s.ollama_num_thread} tracing={tr}"
 )
 '@
     $checkLine = & $py -c $pyCheck 2>&1 | Out-String
@@ -134,6 +144,8 @@ $uvicorn = if (Test-Path $envFile) {
 } else {
     "& '$py' -m uvicorn app.main:app --reload --port 8000"
 }
-$demoPrefix = if ($Demo) { "`$env:ORCHARD_DEMO='true'; " } else { "" }
-Start-Process powershell -ArgumentList @("-NoExit", "-Command", "Set-Location '$backend'; ${demoPrefix}$uvicorn")
+$envPrefix = if ($Demo) { "`$env:ORCHARD_DEMO='true'; " } else { "" }
+if ($Gpu) { $envPrefix += "`$env:OLLAMA_NUM_GPU='999'; " }
+if ($Cpu) { $envPrefix += "`$env:OLLAMA_NUM_GPU='0'; " }
+Start-Process powershell -ArgumentList @("-NoExit", "-Command", "Set-Location '$backend'; ${envPrefix}$uvicorn")
 Start-Process powershell -ArgumentList @("-NoExit", "-Command", "Set-Location '$frontend'; npm run dev")

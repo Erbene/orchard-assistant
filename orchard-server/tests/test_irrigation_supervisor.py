@@ -84,6 +84,19 @@ def test_phenology_targets_track_stage():
     assert target_vwc_for_stage("flowering") > target_vwc_for_stage("dormancy")
 
 
+def test_forecast_rain_is_discounted_in_deficit_score():
+    from app.irrigation.water_score import FORECAST_RAIN_WEIGHT, deficit_score
+
+    assert FORECAST_RAIN_WEIGHT < 1.0
+    # 25 mm QPF must not count as 25 mm of water already in the soil.
+    measured_only = deficit_score(7.0, rain_24h_mm=0.0, forecast_rain_24h_mm=0.0)
+    with_forecast = deficit_score(7.0, rain_24h_mm=0.0, forecast_rain_24h_mm=25.0)
+    with_gauge = deficit_score(7.0, rain_24h_mm=25.0, forecast_rain_24h_mm=0.0)
+    assert with_forecast < measured_only
+    assert with_gauge < with_forecast
+    assert with_forecast == pytest.approx(7.0 - 25.0 * FORECAST_RAIN_WEIGHT)
+
+
 # --------------------------------------------------------------------------
 # 2. Zone Contention Solver (ToT + beam search)
 # --------------------------------------------------------------------------
@@ -124,8 +137,9 @@ def test_solver_resolves_heterogeneous_contention():
 
 def test_solver_skips_when_rain_is_coming():
     trees = [_hydro("mango", 24.0), _hydro("jaboticaba", 25.0)]
+    # Forecast is discounted, so a skip still requires a heavy QPF signal.
     sol = zs.solve(trees, baseline_minutes=30, forecast_rain_24h_mm=25.0)
-    assert sol.recommended_minutes <= 10 and sol.delta_minutes < 0
+    assert sol.recommended_minutes < 30 and sol.delta_minutes < 0
 
 
 # -- target-tracking path (previously zero unit coverage - only the eval's
@@ -209,7 +223,7 @@ def fake_llm(action: str, *, days=0, reason="deficit warrants it", summary="Beca
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=structured)
     llm.invoke = MagicMock(return_value=MagicMock(content=summary))
-    with patch("app.agent.irrigation_supervisor.ChatOllama", return_value=llm):
+    with patch("app.agent.irrigation_supervisor.chat_model", return_value=llm):
         yield
 
 

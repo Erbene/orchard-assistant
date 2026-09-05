@@ -3,12 +3,15 @@
 Computes a **Water Deficit Score** per tree / per zone from the Phase 1 stub
 hardware + the real NWS forecast, before any LLM is involved:
 
-    deficit_score = (target_vwc - current_vwc) - rain_24h_mm - forecast_rain_24h_mm
+    deficit_score = (target_vwc - current_vwc) - rain_24h_mm
+                    - FORECAST_RAIN_WEIGHT * forecast_rain_24h_mm
 
-Higher = drier / more likely to need water. ``target_vwc`` is growth-stage
-aware (``app.irrigation.phenology``); the moisture term is VWC percentage
-points and the rainfall terms are mm - this is a monotonic heuristic score,
-not a physical quantity, so every component is kept on the result.
+Higher = drier / more likely to need water. Forecast rain is discounted
+(``FORECAST_RAIN_WEIGHT``) because QPF is often wrong; the rain gauge is not.
+``target_vwc`` is growth-stage aware (``app.irrigation.phenology``); the
+moisture term is VWC percentage points and the rainfall terms are mm - this
+is a monotonic heuristic score, not a physical quantity, so every component
+is kept on the result.
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from datetime import date
 from ..config import Settings
 from ..irrigation import hardware, weather
 from ..irrigation.phenology import growth_stage, target_vwc_for_stage
+from ..irrigation.water_score import deficit_score
 from ..irrigation.sensors import MoistureSensorService
 from ..repositories.tree_repository import TreeRepository
 from ..schemas.irrigation import WaterBalance, WeatherForecast, ZoneWaterBalance
@@ -71,7 +75,7 @@ class WaterBalanceService:
         )
 
         gap = round(target - current, 1) if current is not None else 0.0
-        deficit = round(gap - rain - fc_mm, 1)
+        deficit = deficit_score(gap, rain, fc_mm)
 
         notes: list[str] = []
         if current is None:
@@ -118,7 +122,7 @@ class WaterBalanceService:
         # protect the driest tree in the zone
         deficit = max(
             (t.deficit_score for t in trees),
-            default=round(self._settings.irrigation_target_vwc - rain - fc_mm, 1),
+            default=deficit_score(self._settings.irrigation_target_vwc, rain, fc_mm),
         )
         return ZoneWaterBalance(
             for_date=on_date,

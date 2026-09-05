@@ -11,7 +11,17 @@ cd orchard-server
 ./.venv/Scripts/python -m eval --only schedule
 ./.venv/Scripts/python -m eval --only refusal         # one category
 ./.venv/Scripts/python -m eval --id chat-refuse-01-toxic-mix
+./.venv/Scripts/python -m eval --profile gpu --run-label production-gpu
+./.venv/Scripts/python -m eval --profile cpu --num-thread 32 --skip-judge --skip-grounding
+./.venv/Scripts/python -m eval --only irrigation --irrigation-model qwen3:8b
 ```
+
+`--profile gpu` requests maximum GPU offload (`num_gpu=999`); `--profile cpu`
+forces `num_gpu=0`. Subject-model flags (`--agent-model`, `--agronomist-model`,
+`--care-plan-model`, `--foreman-model`, `--irrigation-model`) do not change the
+fixed judge/grounding models unless those are overridden separately. Each saved
+result records models, thread/GPU settings, hardware, `ollama ps`, and
+per-row agent/judge/grounding times.
 
 Needs the `postgres` + `chromadb` containers up (`../dev.ps1` or
 `docker compose up -d postgres chromadb`) and `ollama serve` with
@@ -20,9 +30,9 @@ bar (see `report.THRESHOLDS`).
 
 `harness.eval_settings()` pins every field the dataset's intended answers
 depend on — `postgres_db`, `chroma_collection`, `ollama_base_url`,
-`hemisphere` (`"N"`), `irrigation_target_vwc` (`25.0`), `agent_model` and
-`agronomist_model` (`qwen2.5:7b-instruct`) — regardless of what a developer's
-local `.env` sets. `hemisphere` / `irrigation_target_vwc` feed
+`hemisphere` (`"N"`), `irrigation_target_vwc` (`25.0`), and every role model
+(`qwen2.5:7b-instruct`, including judge/grounding) — regardless of what a
+developer's local `.env` sets. `hemisphere` / `irrigation_target_vwc` feed
 `app.irrigation.phenology.growth_stage` / `target_vwc_for_stage`, which every
 irrigation row's `deficit_score` and the solver's `target_vwc` derive from; a
 baseline recorded with different values is not comparable across machines.
@@ -38,7 +48,8 @@ baseline recorded with different values is not comparable across machines.
 Everything runs against a disposable `orchard_eval` database + an
 `orchard_knowledge_eval` Chroma collection, truncated between scenarios. Your
 real `orchard` data is never touched. The Foreman's narration model
-(`qwen2.5:14b`) is optional here — it falls back to the template summary.
+(`FOREMAN_MODEL`, default `qwen2.5:7b-instruct`) is optional here — it falls
+back to the template summary.
 
 ## Grading
 
@@ -166,7 +177,7 @@ growth-stage lookup and the forecast date), `trees` (each may carry `zone_id`,
 pins a stub moisture sensor for that tree), `forecast` (`{"qpf_mm": N}` or
 `{"available": false}`), `rain_bucket_mm` (the 24 h gauge total),
 `auto_approve_skips` (bool → supervisor config), `llm_down` (bool — patches
-`ChatOllama` inside `irrigation_supervisor.py` to raise for this row only, so
+`chat_model` inside `irrigation_supervisor.py` to raise for this row only, so
 the supervisor's `_deliberate` LLM-unavailable fallback runs for real; see
 `irr-11-llm-down-safe-pass`. Distinct from `forecast: {"available": false}`
 (`irr-07`), which only kills the *weather* call — the supervisor's own LLM

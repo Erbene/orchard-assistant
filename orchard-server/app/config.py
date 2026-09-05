@@ -75,6 +75,13 @@ def _float_or_none(raw: str | None) -> float | None:
         return None
 
 
+def _int_or_none(raw: str | None) -> int | None:
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     # Uploaded source files (not Postgres/Chroma data - plain disk storage).
@@ -132,8 +139,21 @@ class Settings:
     ollama_base_url: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     )
+    # Request-level Ollama placement controls. None delegates placement/thread
+    # selection to Ollama. num_gpu=0 forces CPU; a high value (for example 999)
+    # requests maximum GPU layer offload.
+    ollama_num_gpu: int | None = field(
+        default_factory=lambda: _int_or_none(os.environ.get("OLLAMA_NUM_GPU"))
+    )
+    ollama_num_thread: int | None = field(
+        default_factory=lambda: _int_or_none(os.environ.get("OLLAMA_NUM_THREAD"))
+    )
+    ollama_keep_alive: str | None = field(
+        default_factory=lambda: os.environ.get("OLLAMA_KEEP_ALIVE") or None
+    )
     foreman_model: str = field(
-        default_factory=lambda: os.environ.get("FOREMAN_MODEL", "qwen2.5:14b")
+        default_factory=lambda: os.environ.get("FOREMAN_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
     )
     # Router / classifier (short structured output) - keep this small & fast.
     agent_model: str = field(
@@ -144,6 +164,23 @@ class Settings:
     # without slowing the router.
     agronomist_model: str = field(
         default_factory=lambda: os.environ.get("AGRONOMIST_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
+    )
+    care_plan_model: str = field(
+        default_factory=lambda: os.environ.get("CARE_PLAN_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
+    )
+    irrigation_model: str = field(
+        default_factory=lambda: os.environ.get("IRRIGATION_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
+    )
+    judge_model: str = field(
+        default_factory=lambda: os.environ.get("JUDGE_MODEL")
+        or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
+    )
+    grounding_model: str = field(
+        default_factory=lambda: os.environ.get("GROUNDING_MODEL")
+        or os.environ.get("JUDGE_MODEL")
         or os.environ.get("AGENT_MODEL", "qwen2.5:7b-instruct")
     )
 

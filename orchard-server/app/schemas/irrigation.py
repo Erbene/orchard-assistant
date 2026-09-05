@@ -141,9 +141,10 @@ class WaterBalance(BaseModel):
     """Deterministic sensor-fusion result for one tree, computed before the LLM.
 
     ``deficit_score = (target_vwc - current_vwc) - rain_24h_mm -
-    forecast_rain_24h_mm`` (higher = drier / more likely to need water). The
-    two rainfall terms are mm and the moisture term is VWC points - this is a
-    heuristic score, not a physical quantity; the components are all exposed.
+    0.3 * forecast_rain_24h_mm`` (higher = drier / more likely to need water).
+    Forecast rain is discounted because QPF is often wrong. The rainfall terms
+    are mm and the moisture term is VWC points - this is a heuristic score, not
+    a physical quantity; the components are all exposed.
     """
 
     for_date: date

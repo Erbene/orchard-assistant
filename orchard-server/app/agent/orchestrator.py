@@ -15,8 +15,9 @@ from collections.abc import Sequence
 from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
+
+from .ollama import chat_model
 
 from ..config import Settings
 from ..core.logging import get_logger
@@ -108,11 +109,11 @@ def last_user_text(messages: Sequence[Any]) -> str:
 
 @traced("orchestrator.classify")
 async def classify(messages: Sequence[Any], *, settings: Settings) -> Classification:
-    llm = ChatOllama(
+    llm = chat_model(
+        settings,
         model=settings.agent_model,
-        base_url=settings.ollama_base_url,
         temperature=0.0,
-        client_kwargs={"timeout": 30.0},
+        timeout=30.0,
     ).with_structured_output(_ClassificationModel)
 
     try:

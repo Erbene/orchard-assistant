@@ -7,9 +7,9 @@ from __future__ import annotations
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel
 
+from app.agent.ollama import chat_model
 from app.config import Settings
 
 _SYSTEM = (
@@ -36,11 +36,11 @@ class JudgeVerdict(BaseModel):
 
 
 def _client(settings: Settings):
-    return ChatOllama(
-        model=settings.agent_model,
-        base_url=settings.ollama_base_url,
+    return chat_model(
+        settings,
+        model=settings.judge_model,
         temperature=0.0,
-        client_kwargs={"timeout": 60.0},
+        timeout=60.0,
     ).with_structured_output(JudgeVerdict)
 
 

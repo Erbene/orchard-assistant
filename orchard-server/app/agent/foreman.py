@@ -30,6 +30,7 @@ from langgraph.types import interrupt
 from ..config import Settings, get_settings
 from ..core.logging import get_logger
 from .escalation import Escalation, escalate
+from .ollama import chat_model
 from .schedule_rules import Completion, apply_blocks
 
 _log = get_logger("app.foreman")
@@ -162,9 +163,11 @@ def _template_summary(state: "ForemanState") -> str:
     return " ".join(lines)
 
 
-def _narrate(state: "ForemanState") -> tuple[str, list[str]]:
+def _narrate(
+    state: "ForemanState", settings: Settings | None = None
+) -> tuple[str, list[str]]:
     warnings = [e["reason"] for e in state.get("escalations", [])]
-    settings = get_settings()
+    settings = settings or get_settings()
     context = json.dumps(
         {
             "available_minutes": state.get("available_minutes"),
@@ -187,15 +190,13 @@ def _narrate(state: "ForemanState") -> tuple[str, list[str]]:
         default=str,
     )
     try:
-        from langchain_ollama import ChatOllama
-
-        llm = ChatOllama(
+        llm = chat_model(
+            settings,
             model=settings.foreman_model,
-            base_url=settings.ollama_base_url,
             temperature=0.2,
             num_predict=400,
             # a 14B model on CPU is slow; cap it and fall back to the template
-            client_kwargs={"timeout": 45.0},
+            timeout=45.0,
         )
         msg = llm.invoke([SystemMessage(FOREMAN_SYSTEM_PROMPT), HumanMessage(context)])
         summary = (msg.content or "").strip()
@@ -296,12 +297,12 @@ def _finalize(state: ForemanState) -> dict:
     return {"proposed_tasks": final, "dropped_tasks": blocked + dropped}
 
 
-def _narrate_node(state: ForemanState) -> dict:
-    summary, warnings = _narrate(state)
+def _narrate_node(state: ForemanState, settings: Settings | None = None) -> dict:
+    summary, warnings = _narrate(state, settings)
     return {"summary": summary, "warnings": warnings}
 
 
-def build_foreman_graph(checkpointer: Any):
+def build_foreman_graph(checkpointer: Any, settings: Settings | None = None):
     """Compile the Foreman graph with an injected checkpointer (Postgres in the
     app, ``MemorySaver`` in tests)."""
     g = StateGraph(ForemanState)
@@ -309,7 +310,7 @@ def build_foreman_graph(checkpointer: Any):
     g.add_node("propose", _propose)
     g.add_node("resource_check", _resource_check)
     g.add_node("finalize", _finalize)
-    g.add_node("narrate", _narrate_node)
+    g.add_node("narrate", lambda state: _narrate_node(state, settings))
     g.add_edge(START, "time_check")
     g.add_edge("time_check", "propose")
     g.add_edge("propose", "resource_check")

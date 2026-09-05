@@ -1,12 +1,15 @@
-"""Startup diagnostics for the local Ollama models.
+"""Shared Ollama client construction and startup diagnostics.
 
-Logs which of the configured models (`AGENT_MODEL`, `AGRONOMIST_MODEL`,
-`FOREMAN_MODEL`) are actually pulled, so a missing model shows up once at boot
-instead of only as a 404 mid-request. Never raises - purely informational.
+Every application and evaluation call uses :func:`chat_model` so model
+placement options are applied consistently. Startup diagnostics log which
+configured role models are pulled; they never raise.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
+from langchain_ollama import ChatOllama
 
 from ..config import Settings
 from ..core.logging import get_logger
@@ -14,11 +17,41 @@ from ..core.logging import get_logger
 _log = get_logger("app.ollama")
 
 
+def chat_model(
+    settings: Settings,
+    *,
+    model: str,
+    temperature: float,
+    timeout: float,
+    num_predict: int | None = None,
+) -> ChatOllama:
+    """Build a ChatOllama client with the configured execution profile."""
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "base_url": settings.ollama_base_url,
+        "temperature": temperature,
+        "client_kwargs": {"timeout": timeout},
+    }
+    if settings.ollama_num_gpu is not None:
+        kwargs["num_gpu"] = settings.ollama_num_gpu
+    if settings.ollama_num_thread is not None:
+        kwargs["num_thread"] = settings.ollama_num_thread
+    if settings.ollama_keep_alive is not None:
+        kwargs["keep_alive"] = settings.ollama_keep_alive
+    if num_predict is not None:
+        kwargs["num_predict"] = num_predict
+    return ChatOllama(**kwargs)
+
+
 async def report_model_availability(settings: Settings) -> None:
     wanted = {
         "AGENT_MODEL": settings.agent_model,
         "AGRONOMIST_MODEL": settings.agronomist_model,
         "FOREMAN_MODEL": settings.foreman_model,
+        "CARE_PLAN_MODEL": settings.care_plan_model,
+        "IRRIGATION_MODEL": settings.irrigation_model,
+        "JUDGE_MODEL": settings.judge_model,
+        "GROUNDING_MODEL": settings.grounding_model,
     }
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -40,4 +73,9 @@ async def report_model_availability(settings: Settings) -> None:
     if missing:
         _log.warning("ollama.models.missing", missing=missing, hint="ollama pull <model>")
     else:
-        _log.info("ollama.models.ready", models=sorted(set(wanted.values())))
+        _log.info(
+            "ollama.models.ready",
+            models=sorted(set(wanted.values())),
+            num_gpu=settings.ollama_num_gpu,
+            num_thread=settings.ollama_num_thread,
+        )

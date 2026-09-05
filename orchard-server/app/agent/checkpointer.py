@@ -63,7 +63,11 @@ async def _ensure(kind: str, settings: Settings, builder: Callable[[Any], Any]) 
 async def ensure_foreman_graph(settings: Settings) -> Any:
     from .foreman import build_foreman_graph
 
-    return await _ensure("foreman", settings, build_foreman_graph)
+    return await _ensure(
+        "foreman",
+        settings,
+        lambda saver: build_foreman_graph(saver, settings),
+    )
 
 
 async def ensure_irrigation_graph(settings: Settings) -> Any:

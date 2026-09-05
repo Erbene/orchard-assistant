@@ -94,7 +94,7 @@ def fake_plan_llm(draft: _CarePlanModel = _DRAFT):
     structured.ainvoke = AsyncMock(return_value=draft)
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=structured)
-    with patch("app.agent.agronomist.ChatOllama", return_value=llm):
+    with patch("app.agent.agronomist.chat_model", return_value=llm):
         yield
 
 
@@ -445,6 +445,6 @@ def test_generate_care_plan_503_when_ollama_down(client):
     llm = MagicMock()
     llm.with_structured_output = MagicMock(return_value=llm)
     llm.ainvoke = AsyncMock(side_effect=RuntimeError("connection refused"))
-    with patch("app.agent.agronomist.ChatOllama", return_value=llm):
+    with patch("app.agent.agronomist.chat_model", return_value=llm):
         r = client.post(f"/api/v1/trees/{tid}/care-plan/generate")
     assert r.status_code == 503

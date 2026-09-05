@@ -21,12 +21,12 @@ from datetime import date, datetime, timezone
 from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from ..config import Settings
 from ..core.logging import get_logger
+from .ollama import chat_model
 from ..core.tracing import traced
 from ..schemas.irrigation import SupervisorDecision
 from ..tools import irrigation as tools
@@ -92,18 +92,26 @@ IRRIGATION_SUPERVISOR_PROMPT: str = (
 
 SUPERVISOR_SUMMARY_PROMPT: str = (
     "Write ONE plain-language sentence (max 40 words) for the grower explaining "
-    "WHY this irrigation change is proposed. Cite only numbers you are actually "
+    "WHY the exact `decision.action` in the payload is proposed. Never describe "
+    "a different action. Cite only numbers you are actually "
     "given (deficit score, soil VWC %, rain mm, and - only if a run duration is "
     "part of what you were given - run minutes). No preamble, no hedging.\n\n"
     "A schedule SKIP has no run length - do not state or invent one, even "
     "approximately. Example for a skip: '30mm rain forecast and soil is at 28% "
     "VWC - proposing a 2-day skip to save water.'\n\n"
+    "For `pass_no_action`, explicitly say the baseline schedule remains "
+    "unchanged; never recommend solver minutes or a duration adjustment.\n\n"
     "Example for a duration change: 'Soil is at 15% VWC, a 6-point deficit - "
     "proposing a 27 min run instead of the scheduled 25 min to close the gap.'"
 )
 
 
 def _template_summary(state: IrrigationSupervisorState, decision: dict, sol: ZoneSolution | None) -> str:
+    if state.get("llm_available") is False:
+        return (
+            "The LLM is unavailable; leaving the baseline schedule unchanged "
+            "and queued for grower approval."
+        )
     parts = [f"Deficit score {state.get('deficit_score')}"]
     fc = state.get("forecast_rain_24h_mm") or 0
     if fc:
@@ -126,11 +134,11 @@ def _template_summary(state: IrrigationSupervisorState, decision: dict, sol: Zon
 
 def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
     def _llm(prompt: str, payload: dict, model: type[BaseModel] | None = None) -> Any:
-        client = ChatOllama(
-            model=settings.agent_model,
-            base_url=settings.ollama_base_url,
+        client = chat_model(
+            settings,
+            model=settings.irrigation_model,
             temperature=0.0,
-            client_kwargs={"timeout": 45.0},
+            timeout=45.0,
         )
         if model is not None:
             client = client.with_structured_output(model)
@@ -218,8 +226,9 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
         sol_dict = state.get("solution") or {}
         sol = _sol_from_dict(sol_dict) if sol_dict else None
         decision_for_payload = decision
-        if decision["action"] == "skip_schedule" and sol_dict:
-            # A skip carries no run duration (see `_contention`) - don't hand
+        if decision["action"] in ("skip_schedule", "pass_no_action") and sol_dict:
+            # A skip/pass carries no changed run duration (see `_contention`) -
+            # don't hand
             # the model any solver field that *states* a run length as the
             # proposed action, or a local model paraphrases it as the plan
             # ("trim the next run to 7 minutes"). `rationale` is prose built
@@ -243,7 +252,9 @@ def build_irrigation_graph(settings: Settings, checkpointer: Any) -> Any:
             # `_contention`), but a bare 0 still invites a local model to
             # narrate "a zero-minute run". Drop the key instead of zeroing it
             # in the copy the model sees.
-            decision_for_payload = {k: v for k, v in decision.items() if k != "duration_minutes"}
+            decision_for_payload = {
+                k: v for k, v in decision.items() if k != "duration_minutes"
+            }
         payload = {
             "deficit_score": state["deficit_score"],
             "rain_last_24h_mm": state.get("rain_24h_mm"),
