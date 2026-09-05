@@ -227,11 +227,10 @@ Eval harness details: **[orchard-server/eval/README.md](orchard-server/eval/READ
 
 | Channel | Exact gate | Notes |
 | ------- | ---------- | ----- |
-| Full dataset (chat 25 + schedule 12 + irrigation 12) | **49/49** | Re-run 2026-09-03 after Care Plan v2 / two-day gap / HITL |
-| Chat + schedule overlap (Sept 2 baseline set) | **36/36** | `orchard-server/eval/baselines/2026-09-02-full-7b.json` |
-| Irrigation | **12/12** | Prior 11/11 plus `irr-12-two-day-gap` |
+| Full dataset (25 chat + 12 schedule + 12 irrigation) | **49/49** | 2026-09-05: GPU (`100% GPU`, 110 s) and CPU-32 (`100% CPU`, 1177 s) |
+| Advisory judge (GPU run) | not a gate | 29/38 overall, 4/12 irrigation prose, 21/21 grounded agronomy claims |
 
-Irrigation **AI judge is parked** (advisory, not a ship gate). **2026-09-05 role benchmark** (Ryzen 9 5950X + RTX 3070 Ti): Qwen2.5 7B is the production model for every agent. It was the only candidate to pass every exact role suite; 14B, Qwen3 8B, and Gemma 3 4B added regressions or latency without a quality gain. GPU production suite: **49/49 exact**, `100% GPU`, 110 s agent time. See `orchard-server/eval/baselines/2026-09-05-role-benchmark.md`.
+**2026-09-05 role benchmark** (Ryzen 9 5950X + RTX 3070 Ti): Qwen2.5 7B is the production model for every agent. It was the only candidate to pass every exact role suite; 14B, Qwen3 8B, and Gemma 3 4B added regressions or latency without a quality gain. See `orchard-server/eval/baselines/2026-09-05-role-benchmark.md`.
 
 ---
 

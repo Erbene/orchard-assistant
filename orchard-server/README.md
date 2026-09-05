@@ -671,8 +671,9 @@ ad-hoc runs go to `eval/results/` (git-ignored).
   `valid_months`, `biological_anchor`, and phenology months. Recurrence and
   baseline materialisation both call the solver.
 - **2026-09-03 — full eval re-run** after Care Plan v2, irrigation HITL, 2-day
-  gap, and DEMO pins. **49/49 exact** (chat 25/25, schedule 12/12, irrigation
-  12/12 including `irr-12-two-day-gap`). Overlap with
-  `eval/baselines/2026-09-02-full-7b.json` still **36/36 exact**. Judge **29/38**
-  (~76%) — advisory noise; irrigation judge remains parked. Results in
-  gitignored `eval/results/` (not a new tracked baseline).
+  gap, and DEMO pins. First **49/49 exact** on the current dataset (25 chat,
+  12 schedule, 12 irrigation including `irr-12-two-day-gap`).
+- **2026-09-05 — production confirmation.** Same 49-row suite on Qwen2.5 7B
+  for every role: **49/49 exact** on GPU (110 s agent, `100% GPU`, judge
+  29/38, grounded 21/21) and again on CPU-32 (1177 s, `100% CPU`).
+  Snapshot: `eval/baselines/2026-09-05-role-benchmark.md`.
