@@ -12,12 +12,13 @@ sidebar links the main routes:
 | `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees` | Trees CRUD data table — search, sort, paginate, row actions, modal form. |
 | `/trees/[id]` | Tree detail with **Care Plan** tab (month strip, baseline wizard, template editing). |
-| `/zones` | Rachio zones — read-only list from the live Rachio API; manual water triggers a real Rachio run (bypasses irrigation HITL). |
+| `/zones` | Rachio zones — live list from the Rachio API plus an editable local label (fallback `Zone {n}`); manual water triggers a real Rachio run (bypasses irrigation HITL). |
 | `/sources` | Knowledge-base sources: CRUD table + modal to upload a file or paste text. |
 
 `species` and `variety` are free-text inputs, stored exactly as typed by
 [orchard-server](../orchard-server) (no enums). Zone configuration is edited in
-the Rachio app — this UI only lists zones and can start a manual run.
+the Rachio app. This UI lists zones, stores a local display label, and can
+start a manual run.
 
 ## Layout
 

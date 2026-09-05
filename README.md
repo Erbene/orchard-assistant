@@ -30,7 +30,7 @@ Orchard Assistant is a personal assistant for that grower: three LangGraph workf
 | **JIT labor packing** | `/schedule` | Foreman negotiates available minutes and tools, escalates time-critical tasks, and packs a knapsack plan — nothing writes to the task DB until you confirm. |
 | **Irrigation supervision** | `/irrigation` | Supervisor reads weather and moisture, runs a Tree-of-Thoughts zone-duration solver, and pauses before execution. Watering/pass proposals require approval; skips may be configured for auto-approval. |
 
-Supporting surfaces: `/trees` and `/trees/[id]` (CRUD + Care Plan tab), `/sources` (knowledge-base upload and tree linking), `/zones` (live Rachio zone list).
+Supporting surfaces: `/trees` and `/trees/[id]` (CRUD + Care Plan tab), `/sources` (knowledge-base upload and tree linking), `/zones` (live Rachio zone list with optional local labels).
 
 Deep API docs, agent prompts, and eval log: **[orchard-server/README.md](orchard-server/README.md)**.
 
@@ -83,24 +83,26 @@ flowchart TD
   E --> E1["Escalate urgent tasks<br/>deterministic"]
   E1 --> E2["Apply biological-date blocks<br/>deterministic"]
   E2 --> E3["Greedy knapsack pack<br/>deterministic"]
-  E3 --> F{"resource_check<br/>deterministic"}
+  E3 --> E4["Apply same-session conflicts<br/>deterministic"]
+  E4 --> F{"resource_check<br/>deterministic"}
 
   F -->|interrupt| G["Grower confirms tools<br/>grower"]
   G --> H["finalize / refit<br/>deterministic"]
   F -->|nothing required| H
-  H --> I["narrate<br/>Foreman agent"]
+  H --> H1["review adversarial pairs<br/>Agronomist agent"]
+  H1 --> I["narrate briefing<br/>Foreman agent"]
   I --> J["Review proposed session<br/>grower"]
   J -->|complete or report| K["Write task outcomes<br/>deterministic"]
 
   classDef agent fill:#e7f2ea,stroke:#3d6b4f,color:#1a2e22
   classDef det fill:#f3f4f6,stroke:#9ca3af,color:#374151
   classDef human fill:#fff7e0,stroke:#c4a035,color:#5c4a12
-  class I agent
-  class B,C,E,E1,E2,E3,F,H,K det
+  class H1,I agent
+  class B,C,E,E1,E2,E3,E4,F,H,K det
   class A,D,G,J human
 ```
 
-Escalation, date rules, packing, and refitting are deterministic Python. The checkpointed graph can pause for time and tool answers; planning itself does not modify task records. The Foreman agent only writes the session summary (template fallback if Ollama is down).
+Escalation, completed-task blocks, same-session conflicts (one fertilize, spray, or mulch job per tree), packing, and refitting are deterministic Python. The Agronomist then reviews the packed set for leftover adversarial pairs. The checkpointed graph can pause for time and tool answers; planning itself does not modify task records. The Foreman agent only writes the owner-facing briefing (template fallback if Ollama is down).
 
 ### 3. Irrigation Supervisor — proposal and approval
 
@@ -208,7 +210,7 @@ Other demo presets (API): `rain-skip` (skip schedule after heavy QPF), `drought-
 | `/irrigation/sensors` | Sensor readings; demo moisture/rain pins when `ORCHARD_DEMO=true` |
 | `/irrigation/schedule` | Rachio zone schedule + supervisor settings |
 | `/trees`, `/trees/[id]` | Tree CRUD, Care Plan tab, linked sources |
-| `/zones` | Rachio zones (read-only list; **manual water is a real Rachio write**) |
+| `/zones` | Rachio zones (live list + local labels; **manual water is a real Rachio write**) |
 | `/sources` | Knowledge-base upload, compose, and tree linking |
 
 MCP endpoint (when backend is running): `http://127.0.0.1:8000/mcp/sse`.

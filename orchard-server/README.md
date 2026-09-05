@@ -8,12 +8,14 @@ over an async **PostgreSQL + pgvector** connection and return `dict` rows, and
 **ChromaDB HTTP server**. Both run as containers (`docker-compose.yml`) —
 there is no SQLite / embedded mode.
 
-**Irrigation zones are not stored here.** They are the grower's real
-**Rachio** zones, read live and **read-only** through the Rachio Public API
-([app/services/rachio.py](app/services/rachio.py)) — all zone configuration is
-edited in the official Rachio app. The one write we perform is starting a
-manual watering run. `tree.zone_id` is just a free-text reference to a Rachio
-zone id.
+**Rachio remains the source of zone hardware config** (layout, flow, last
+watered), read live through the Rachio Public API
+([app/services/rachio.py](app/services/rachio.py)). Zone programs are edited in
+the official Rachio app. A local `zone` table stores optional grower **labels**
+(`PUT /api/v1/zones/{zone_id}/label`); the UI shows the label, or
+`Zone {number}` when none is set. The one Rachio write we perform is starting a
+manual watering run. `tree.zone_id` is a free-text reference to a Rachio zone
+id.
 
 ## Layers
 
@@ -88,9 +90,10 @@ All API routes are mounted under **`/api/v1`** (`GET /health` is not). The
 
 | Method | Path | Notes |
 | ------ | ---- | ----- |
-| `GET`    | `/api/v1/zones` | Rachio zones grouped by device (read-only); `503` if `RACHIO_API_KEY` unset |
-| `GET`    | `/api/v1/zones/{zone_id}` | one Rachio zone's config; `404` if unknown |
-| `POST`   | `/api/v1/zones/{zone_id}/water` | `{ duration_minutes }` → start a manual run; `202`. **No** create/update/delete — zone config is Rachio-app-only |
+| `GET`    | `/api/v1/zones` | Rachio zones grouped by device, overlaid with local `label` / `display_name`; `503` if `RACHIO_API_KEY` unset |
+| `GET`    | `/api/v1/zones/{zone_id}` | one Rachio zone's config + local label; `404` if unknown |
+| `PUT`    | `/api/v1/zones/{zone_id}/label` | `{label}` — store a local name (empty clears it). Hardware config stays in the Rachio app |
+| `POST`   | `/api/v1/zones/{zone_id}/water` | `{ duration_minutes }` → start a manual run; `202` |
 | `GET`    | `/api/v1/trees` | list; accepts `?species=` / `?zone_id=` (zone_id is free text) |
 | `GET`    | `/api/v1/trees/{id}` | 404 if missing |
 | `POST`   | `/api/v1/trees` | 201; `tree_id` auto-assigned |
@@ -141,11 +144,14 @@ Per-tree routine maintenance. **`task_templates`** (`tree_id` CASCADE, `name`,
   0.6·height when unknown) feeds a `_RATES` table (`base_minutes` +
   `minutes_per_m³`, consumables per m³, a `Pole saw` past 3 m). The LLM never
   does the arithmetic — see the eval decision log.
-- **`agronomist.generate_care_plan(tree, …)`** — `AGENT_MODEL` (7B) picks 4–9
-  `_PlanItem`s (`name`, `category` enum, `rate_class`, `interval_days`,
-  `valid_months`, optional `biological_anchor` / `anchor_offset_days`,
-  `priority_score`, optional `baseline_question`); Python scales each to a
-  template row. Raises `LLMUnavailable` → **503** when Ollama is down.
+- **`agronomist.generate_care_plan(tree, …)`** — `CARE_PLAN_MODEL` (falls back
+  to `AGENT_MODEL`) picks 4–9 `_PlanItem`s (`name`, `category`, `rate_class`,
+  optional **`product`**, `interval_days`, `valid_months`, optional
+  `biological_anchor` / `anchor_offset_days`, `priority_score`, optional
+  `baseline_question`). Python scales each to a template row, then
+  **merges jobs that recommend the same product** (same NPK / same bag). Distinct
+  analyses (22-0-0 vs 8-3-9) stay separate. Raises `LLMUnavailable` → **503**
+  when Ollama is down.
 - **[app/agent/schedule_solver.py](app/agent/schedule_solver.py)** — pure
   scheduling math (no DB, no LLM). `next_due` applies in-window cadence
   (`interval_days`), `valid_months` preference clamping, and biological safety
@@ -358,18 +364,26 @@ LangGraph negotiation** driven over REST:
 
 ```
 time_check --(interrupt: available_minutes)--> propose --> resource_check
-  --(interrupt: have_resources)--> finalize --> narrate --> END
+  --(interrupt: have_resources)--> finalize --> review --> narrate --> END
 ```
 
-- **Deterministic engine** (`escalate` / `pack` / `resources_for` / `refit`):
+- **Deterministic engine** (`escalate` / `apply_blocks` / `apply_session_conflicts`
+  / `pack` / `resources_for` / `refit`):
   [app/agent/escalation.py](app/agent/escalation.py) inflates the
   `priority_score` of dangerously-overdue tasks (keyword rules table +
-  generic >14-day fallback), then a greedy knapsack packs the budget, the
-  union of `required_resources` is asked about, and tasks needing a missing
-  tool are dropped + the freed time backfilled. **No node writes the DB.**
+  generic >14-day fallback). [app/agent/schedule_rules.py](app/agent/schedule_rules.py)
+  applies completed-task `blocks` and **same-session conflicts** (one
+  fertilize, spray, or mulch job per tree; prospective PHI blocks). A greedy
+  knapsack packs the budget, the union of `required_resources` is asked about,
+  and tasks needing a missing tool are dropped + the freed time backfilled —
+  never with a conflicting sibling. **No node writes the DB.**
+- **Agronomist review**: after finalize, `review_session_adversaries` asks the
+  Agronomist whether any remaining pair on the same tree is adversarial.
+  Offline / model-down → empty extra drops; the deterministic rules still hold.
 - **Narration**: a local **Ollama** model (`FOREMAN_MODEL`, default
-  `qwen2.5:7b-instruct`) writes the session summary. Optional — falls back to a
-  template when Ollama is unreachable.
+  `qwen2.5:7b-instruct`) narrates the deterministic selection as an
+  owner-facing work-session briefing. Optional — falls back to a template when
+  Ollama is unreachable.
 - **Sessions** persist to Postgres (`langgraph-checkpoint-postgres`,
   `checkpoints*` tables) keyed by `thread_id`, resumable after a restart. The
   graph is *synchronous* (async psycopg can't run on Windows' Proactor loop)
@@ -434,7 +448,7 @@ directly (one short-lived Postgres connection per call from the same pooled
 engine the HTTP API uses, wrapped in a transaction) — no HTTP calls to self.
 
 **Tools:**
-- zones (Rachio, read-only) — `list_zones`, `get_zone_details`,
+- zones (Rachio + local labels) — `list_zones`, `get_zone_details`,
   **`trigger_rachio_watering(zone_id, duration_minutes)`** (the Foreman's JIT
   irrigation action; the only Rachio write). No create/update/delete.
 - trees — `list_trees`, `get_tree_details`, `create_tree`, `update_tree`, `delete_tree`
@@ -620,12 +634,14 @@ ad-hoc runs go to `eval/results/` (git-ignored).
      tree / source CRUD is `refuse` + a pointer to the Trees / Sources pages
      (chat's tool surface is deliberately router + `mark_tasks_complete` only).
 - **2026-09-02 — Care Plan: LLM picks, Python scales.** The Agronomist chooses
-  the task list, `category` and a `rate_class`; `app/agent/care_plan.py` derives
-  every number (minutes, fertilizer kg, compost L) from canopy volume via a
-  fixed rates table. Rationale: the eval showed 7B unreliable/inconsistent at
-  dosing math, and a care plan that drives real fertiliser amounts must be
-  reproducible and explainable. Revisit if the rates table proves too coarse
-  for real orchard blocks.
+  the task list, `category`, a `rate_class`, and (later) an optional
+  `product`; `app/agent/care_plan.py` derives every number (minutes, fertilizer
+  kg, compost L) from canopy volume via a fixed rates table. Same recommended
+  product → one template; distinct analyses (22-0-0 vs 8-3-9) stay separate.
+  Rationale: the eval showed 7B unreliable/inconsistent at dosing math, and a
+  care plan that drives real fertiliser amounts must be reproducible and
+  explainable. Revisit if the rates table proves too coarse for real orchard
+  blocks.
 - **2026-09-02 — Agronomist model experiment.** Reading the 7B vs 14B answers
   side by side: 14B was marginally tidier and more conservative (declined to
   give an avocado N-dose from general knowledge where 7B gave a number); 7B was

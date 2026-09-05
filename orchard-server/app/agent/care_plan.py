@@ -1,10 +1,12 @@
 """Deterministic size-scaling for the Care Plan engine.
 
-The Agronomist LLM only picks *which* routine tasks a tree needs, a ``category``
-and a ``rate_class``. Everything numeric - labour minutes and product
-quantities - is computed here from the tree's canopy volume, so a plan is
-reproducible and auditable (the eval log flags qwen2.5:7b as unreliable at
-dosing math).
+The Agronomist LLM picks *which* routine tasks a tree needs, a ``category``,
+a ``rate_class``, and an optional recommended ``product``. Everything numeric
+— labour minutes and product quantities — is computed here from the tree's
+canopy volume, so a plan is reproducible and auditable (the eval log flags
+qwen2.5:7b as unreliable at dosing math). Templates that recommend the same
+product (same bag / same NPK analysis) are merged; distinct products stay
+separate.
 
 All constants are tunable; they are rough field estimates, not label rates.
 Nothing here calls a model or touches the DB.
