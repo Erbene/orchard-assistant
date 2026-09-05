@@ -257,9 +257,6 @@ function DeviceZoneTable({
       <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
         <div>
           <h2 className="font-medium">{device.name}</h2>
-          <p className="text-xs text-muted-foreground">
-            {device.model ?? "Rachio controller"}
-          </p>
         </div>
         <Badge
           variant={device.status === "ONLINE" ? "success" : "muted"}
