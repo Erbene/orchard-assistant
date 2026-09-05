@@ -21,17 +21,17 @@ happens in chat. Served over SSE by `ChatService` via `POST /api/v1/chat`.
 **Files:** [foreman.py](foreman.py), [escalation.py](escalation.py), [checkpointer.py](checkpointer.py)
 
 ```
-time_check ──(interrupt: need_time)──► propose ──► resource_check
-  ──(interrupt: need_resources)──► finalize ──► review ──► narrate ──► END
+time_check ──(interrupt: need_time)──► constrain ──► propose ──► resource_check
+  ──(interrupt: need_resources)──► finalize ──► narrate ──► END
 ```
 
 Checkpointed Postgres graph with two interrupts (`need_time` / `need_resources`).
-Deterministic Python (`escalation` → completed-task blocks → knapsack pack →
+The Agronomist emits leftover pairwise edges and category blocks once
+(`emit_session_constraints`). Deterministic Python then packs under those
+constraints (`escalation` → completed-task blocks → knapsack pack →
 same-session conflicts → resource check → refit) — no node writes the DB until
-`/complete` or `/report`. After finalize, the Agronomist reviews the packed
-session for leftover adversarial pairs (`review_session_adversaries`). Optional
-Ollama narration (`FOREMAN_MODEL`) writes an owner-facing briefing. Driven over
-REST at `/api/v1/schedule/*`.
+`/complete` or `/report`. Optional Ollama narration (`FOREMAN_MODEL`) writes an
+owner-facing briefing. Driven over REST at `/api/v1/schedule/*`.
 
 ## 3. Irrigation supervisor — HITL + ToT zone solver
 
@@ -54,7 +54,7 @@ the 2-day spacing rule from Rachio `lastWateredDate`.
 | File | Role |
 | ---- | ---- |
 | [care_plan.py](care_plan.py) | Canopy-volume scaler; merge templates that share a recommended product |
-| [schedule_rules.py](schedule_rules.py) | Completed-task blocks + same-session conflicts |
+| [schedule_rules.py](schedule_rules.py) | Completed-task blocks + same-session conflicts + Agronomist constraint edges |
 | [schedule_solver.py](schedule_solver.py) | Biological calendar dates (`valid_months`, anchors, phenology) |
 | [ollama.py](ollama.py) | Shared `chat_model()` helper (num_gpu / num_thread / keep_alive) |
 | [client.py](client.py) | MCP tool binding for agent clients |

@@ -7,6 +7,7 @@ from app.agent.schedule_rules import (
     Completion,
     apply_blocks,
     apply_session_conflicts,
+    conflicting_leftovers,
     ready_on,
     session_conflict_reason,
 )
@@ -142,3 +143,34 @@ def test_session_conflict_two_prunes_ok():
     kept, dropped = apply_session_conflicts([a, b])
     assert {t["id"] for t in kept} == {1, 2}
     assert dropped == []
+
+
+def test_pair_constraint_flags_same_tree_scouts():
+    a = {**_task(1, category="scout"), "_effective_score": 5.0}
+    b = {**_task(2, category="scout"), "_effective_score": 4.0}
+    constraints = {
+        "pairs": [{"a": 1, "b": 2, "reason": "agronomist: two scouts same tree"}],
+        "category_blocks": [],
+    }
+    assert session_conflict_reason(a, b, constraints) == "agronomist: two scouts same tree"
+    kept, dropped = apply_session_conflicts([a, b], constraints)
+    assert [t["id"] for t in kept] == [1]
+    assert dropped[0]["id"] == 2
+    other = {**_task(3, tree_id=2, category="scout"), "_effective_score": 4.0}
+    assert session_conflict_reason(a, other, constraints) is None
+
+
+def test_category_block_constraint_same_tree():
+    spray = {**_task(1, category="scout"), "template_category": "scout", "_effective_score": 5.0}
+    prune = {**_task(2, category="prune"), "_effective_score": 4.0}
+    constraints = {
+        "pairs": [],
+        "category_blocks": [{
+            "category_a": "scout",
+            "category_b": "prune",
+            "reason": "agronomist: scout then prune",
+        }],
+    }
+    assert "agronomist" in (session_conflict_reason(prune, spray, constraints) or "")
+    leftovers = conflicting_leftovers([spray, prune], [spray], constraints)
+    assert [t["id"] for t in leftovers] == [2]

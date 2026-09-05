@@ -429,53 +429,86 @@ def _existing_product(template: dict) -> str | None:
 
 
 # --------------------------------------------------------------------------
-# Same-session adversarial review (Foreman asks before committing a plan)
+# Same-session constraints (Foreman packs once under these edges)
 # --------------------------------------------------------------------------
 
-SESSION_REVIEW_PROMPT: str = (
-    "You are the Orchard Agronomist reviewing a proposed same-day work session. "
-    "The scheduler already dropped obvious duplicates. Flag remaining pairs that "
-    "must NOT run together on the SAME tree: two nutrient applications, two "
-    "sprays, the same product twice, or a job whose PHI/block rules forbid the "
-    "other the same day (for example spray then prune). "
-    "For each pair, drop the lower-priority task and keep the more important one. "
-    "If nothing is adversarial, return an empty drops list. "
-    "Do not invent tasks. Do not drop work on a different tree."
+SESSION_CONSTRAINTS_PROMPT: str = (
+    "You are the Orchard Agronomist annotating constraints for a same-day work "
+    "session. The scheduler already enforces one fertilize, spray, or mulch job "
+    "per tree, and any template PHI/block lists. Emit only ADDITIONAL "
+    "constraints the packer must honor:\n"
+    "- pairs: two task ids on the SAME tree that must not share a session "
+    "(two scouts, the same product twice, spray then prune if not already in "
+    "blocks).\n"
+    "- category_blocks: two categories that must not share a same-tree session.\n"
+    "If nothing extra is needed, return empty lists. Do not invent tasks. Do "
+    "not constrain work on different trees. Do not repeat the built-in "
+    "fertilize/spray/mulch exclusivity rule."
 )
 
+_CONSTRAINT_PAYLOAD_CAP = 40
 
-class _AdversaryDrop(BaseModel):
-    drop_task_id: int
-    keep_task_id: int
+
+class _PairEdge(BaseModel):
+    task_a_id: int
+    task_b_id: int
     reason: str = Field(default="", max_length=240)
 
 
-class _SessionReview(BaseModel):
-    drops: list[_AdversaryDrop] = Field(default_factory=list, max_length=12)
+class _CategoryBlock(BaseModel):
+    category_a: str = Field(default="", max_length=40)
+    category_b: str = Field(default="", max_length=40)
+    reason: str = Field(default="", max_length=240)
 
 
-def review_session_adversaries(
+class _SessionConstraintsModel(BaseModel):
+    pairs: list[_PairEdge] = Field(default_factory=list, max_length=12)
+    category_blocks: list[_CategoryBlock] = Field(default_factory=list, max_length=12)
+
+
+def _agronomist_reason(raw: str, fallback: str) -> str:
+    text = (raw or "").strip() or fallback
+    if text.lower().startswith("agronomist"):
+        return text
+    return f"agronomist: {text}"
+
+
+def _task_cat(task: dict) -> str:
+    return str(task.get("template_category") or task.get("category") or "").strip()
+
+
+@traced("agronomist.session_constraints")
+def emit_session_constraints(
     tasks: list[dict], settings: Settings
-) -> list[dict]:
-    """Ask the agronomist which proposed tasks are adversarial. Never raises.
+) -> dict[str, list]:
+    """Ask the agronomist for leftover session constraints. Never raises.
 
-    Returns copies of the tasks to drop, tagged with ``_drop_reason``. Offline
-    or malformed model output yields an empty list — deterministic session
-    rules already ran.
+    Returns ``{"pairs": [...], "category_blocks": [...]}``. Offline or
+    malformed model output yields empty lists — deterministic session rules
+    still hold. The Foreman packs once under the union of both.
     """
+    empty: dict[str, list] = {"pairs": [], "category_blocks": []}
     if len(tasks) < 2:
-        return []
+        return empty
+
+    ranked = sorted(
+        tasks,
+        key=lambda t: float(t.get("_effective_score", t.get("priority_score") or 0) or 0),
+        reverse=True,
+    )[:_CONSTRAINT_PAYLOAD_CAP]
+    by_id = {t["id"]: t for t in ranked if t.get("id") is not None}
+    present_cats = {_task_cat(t).lower() for t in ranked if _task_cat(t)}
     payload = [
         {
             "id": t.get("id"),
             "tree_id": t.get("tree_id"),
             "action_type": t.get("action_type"),
-            "category": t.get("template_category") or t.get("category"),
+            "category": _task_cat(t) or None,
             "priority": t.get("_effective_score", t.get("priority_score")),
             "resources": t.get("required_resources") or [],
             "blocks": t.get("template_blocks") or t.get("blocks") or [],
         }
-        for t in tasks
+        for t in ranked
     ]
     try:
         llm = chat_model(
@@ -484,35 +517,69 @@ def review_session_adversaries(
             temperature=0.0,
             num_predict=300,
             timeout=45.0,
-        ).with_structured_output(_SessionReview)
-        review: _SessionReview = llm.invoke(
+        ).with_structured_output(_SessionConstraintsModel)
+        review: _SessionConstraintsModel = llm.invoke(
             [
-                SystemMessage(SESSION_REVIEW_PROMPT),
-                HumanMessage(json.dumps({"proposed": payload}, default=str)),
+                SystemMessage(SESSION_CONSTRAINTS_PROMPT),
+                HumanMessage(json.dumps({"eligible": payload}, default=str)),
             ]
         )
     except Exception as exc:  # noqa: BLE001 - offline / model missing
-        _log.info("agronomist.session_review.fallback", error=str(exc)[:160])
-        return []
+        _log.info("agronomist.session_constraints.fallback", error=str(exc)[:160])
+        return empty
 
-    by_id = {t["id"]: t for t in tasks if t.get("id") is not None}
-    dropped: list[dict] = []
-    seen: set[int] = set()
-    for item in review.drops:
-        drop_id, keep_id = item.drop_task_id, item.keep_task_id
-        if drop_id not in by_id or keep_id not in by_id or drop_id == keep_id:
+    pairs: list[dict] = []
+    seen_pairs: set[frozenset[int]] = set()
+    for item in review.pairs:
+        left, right = item.task_a_id, item.task_b_id
+        if left not in by_id or right not in by_id or left == right:
             continue
-        if drop_id in seen:
+        if by_id[left].get("tree_id") != by_id[right].get("tree_id"):
             continue
-        seen.add(drop_id)
-        reason = (item.reason or "").strip() or (
-            f"agronomist: adversarial with #{keep_id}"
+        key = frozenset((left, right))
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        pairs.append(
+            {
+                "a": left,
+                "b": right,
+                "reason": _agronomist_reason(
+                    item.reason, f"cannot share a session (#{left} / #{right})"
+                ),
+            }
         )
-        dropped.append({**by_id[drop_id], "_drop_reason": reason})
-    if dropped:
+
+    category_blocks: list[dict] = []
+    seen_cats: set[frozenset[str]] = set()
+    exclusive = {"fertilize", "spray", "mulch"}
+    for item in review.category_blocks:
+        left = item.category_a.strip().lower()
+        right = item.category_b.strip().lower()
+        if not left or not right:
+            continue
+        if left not in present_cats or right not in present_cats:
+            continue
+        if left == right and left in exclusive:
+            continue
+        key = frozenset((left, right))
+        if key in seen_cats:
+            continue
+        seen_cats.add(key)
+        category_blocks.append(
+            {
+                "category_a": left,
+                "category_b": right,
+                "reason": _agronomist_reason(
+                    item.reason, f"{left} and {right} cannot share a session"
+                ),
+            }
+        )
+
+    if pairs or category_blocks:
         _log.info(
-            "agronomist.session_review.drops",
-            count=len(dropped),
-            ids=[t["id"] for t in dropped],
+            "agronomist.session_constraints.emit",
+            pairs=len(pairs),
+            category_blocks=len(category_blocks),
         )
-    return dropped
+    return {"pairs": pairs, "category_blocks": category_blocks}

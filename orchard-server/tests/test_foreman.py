@@ -8,8 +8,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
 from app.agent.escalation import escalate, task_age_days
+from app.agent.agronomist import emit_session_constraints
 from app.agent.foreman import build_foreman_graph, pack, refit, resources_for
 from app.agent.schedule_rules import Completion, apply_blocks
+from app.config import Settings
 
 
 def _task(tid, action, score, minutes, resources=(), *, days_old=0):
@@ -118,6 +120,20 @@ def test_pack_respects_budget_and_prefers_value():
 def test_pack_schedules_tasks_without_estimates():
     tasks = [{**_task(1, "a", 5.0, None), "_effective_score": 5.0}]
     assert pack(tasks, minutes=30) == tasks   # default 30 min -> fits
+
+
+def test_pack_skips_constrained_pair_and_fills_other():
+    a = {**_task(1, "scout pests", 5.0, 15), "_effective_score": 5.0, "template_category": "scout"}
+    b = {**_task(2, "scout disease", 4.0, 15), "_effective_score": 4.0, "template_category": "scout"}
+    mulch = {**_task(3, "mulch ring", 3.0, 20), "_effective_score": 3.0, "template_category": "mulch"}
+    constraints = {
+        "pairs": [{"a": 1, "b": 2, "reason": "agronomist: two scouts same tree"}],
+        "category_blocks": [],
+    }
+    unconstrained = pack([a, b, mulch], minutes=35)
+    assert {t["id"] for t in unconstrained} == {1, 2}
+    picked = pack([a, b, mulch], minutes=35, constraints=constraints)
+    assert {t["id"] for t in picked} == {1, 3}
 
 
 def test_refit_drops_blocked_tasks_and_backfills():
@@ -284,22 +300,78 @@ def test_graph_fertilize_on_two_trees_both_kept():
     assert {t["id"] for t in r["proposed_tasks"]} == {1, 2}
 
 
-def test_agronomist_review_drops_remaining_adversary(monkeypatch):
+def test_agronomist_constraints_pack_once(monkeypatch):
     from app.agent import foreman as fm
 
-    def fake_review(tasks, settings):
-        victim = next(t for t in tasks if t["id"] == 2)
-        return [{**victim, "_drop_reason": "agronomist: two scouts same tree"}]
+    def fake_emit(tasks, settings):
+        return {
+            "pairs": [{"a": 1, "b": 2, "reason": "agronomist: two scouts same tree"}],
+            "category_blocks": [],
+        }
 
-    monkeypatch.setattr(fm, "review_session_adversaries", fake_review)
+    monkeypatch.setattr(fm, "emit_session_constraints", fake_emit)
     g = _graph()
-    cfg = {"configurable": {"thread_id": "t-review"}}
+    cfg = {"configurable": {"thread_id": "t-constrain"}}
+    tasks = [
+        {**_task(1, "scout pests", 5.0, 15), "template_category": "scout"},
+        {**_task(2, "scout disease", 4.0, 15), "template_category": "scout"},
+        {**_task(3, "mulch ring", 3.0, 20), "template_category": "mulch"},
+    ]
+    r = g.invoke({"pending_tasks": tasks, "available_minutes": 35}, cfg)
+    assert r.get("__interrupt__") is None
+    assert {t["id"] for t in r["proposed_tasks"]} == {1, 3}
+    dropped = next(t for t in r["dropped_tasks"] if t["id"] == 2)
+    assert "agronomist" in dropped["_drop_reason"]
+
+
+def test_emit_session_constraints_validates_pairs(monkeypatch):
+    from app.agent import agronomist as agro
+    from app.agent.agronomist import _CategoryBlock, _PairEdge, _SessionConstraintsModel
+
+    class _Fake:
+        def with_structured_output(self, _model):
+            return self
+
+        def invoke(self, _messages):
+            return _SessionConstraintsModel(
+                pairs=[
+                    _PairEdge(task_a_id=1, task_b_id=2, reason="two scouts"),
+                    _PairEdge(task_a_id=1, task_b_id=3, reason="cross tree"),
+                    _PairEdge(task_a_id=1, task_b_id=1, reason="self"),
+                    _PairEdge(task_a_id=1, task_b_id=99, reason="unknown"),
+                ],
+                category_blocks=[
+                    _CategoryBlock(category_a="scout", category_b="prune", reason="PHI"),
+                    _CategoryBlock(category_a="fertilize", category_b="fertilize", reason="dup"),
+                    _CategoryBlock(category_a="harvest", category_b="prune", reason="absent"),
+                ],
+            )
+
+    monkeypatch.setattr(agro, "chat_model", lambda *a, **k: _Fake())
+    tasks = [
+        {**_task(1, "scout pests", 5.0, 15), "template_category": "scout"},
+        {**_task(2, "scout disease", 4.0, 15), "template_category": "scout"},
+        {**_task(3, "scout other", 3.0, 15), "tree_id": 2, "template_category": "scout"},
+        {**_task(4, "sprout prune", 2.0, 20), "template_category": "prune"},
+    ]
+    out = emit_session_constraints(tasks, Settings())
+    assert out["pairs"] == [
+        {"a": 1, "b": 2, "reason": "agronomist: two scouts"},
+    ]
+    assert out["category_blocks"] == [
+        {"category_a": "scout", "category_b": "prune", "reason": "agronomist: PHI"},
+    ]
+
+
+def test_emit_session_constraints_offline_empty(monkeypatch):
+    from app.agent import agronomist as agro
+
+    def boom(*_a, **_k):
+        raise RuntimeError("ollama down")
+
+    monkeypatch.setattr(agro, "chat_model", boom)
     tasks = [
         {**_task(1, "scout pests", 5.0, 15), "template_category": "scout"},
         {**_task(2, "scout disease", 4.0, 15), "template_category": "scout"},
     ]
-    r = g.invoke({"pending_tasks": tasks, "available_minutes": 120}, cfg)
-    assert r.get("__interrupt__") is None
-    assert {t["id"] for t in r["proposed_tasks"]} == {1}
-    dropped = next(t for t in r["dropped_tasks"] if t["id"] == 2)
-    assert "agronomist" in dropped["_drop_reason"]
+    assert emit_session_constraints(tasks, Settings()) == {"pairs": [], "category_blocks": []}

@@ -5,15 +5,24 @@ other categories on the same tree until ``min_gap_days`` have elapsed.
 
 Same-session rules also apply *before* work is done: two fertilize (or spray,
 or mulch) jobs on one tree cannot share a plan, and a task whose template
-``blocks`` the other's category cannot run the same day.
+``blocks`` the other's category cannot run the same day. The Agronomist may
+add leftover pairwise edges or category blocks; knapsack / refit honor them
+through :func:`session_conflict_reason`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Mapping
 
 Task = dict[str, Any]
+# Pairwise edges + extra category blocks from the Agronomist. Empty lists are
+# a no-op; the packer treats this the same as built-in session rules.
+SessionConstraints = Mapping[str, Any]
+
+
+def empty_session_constraints() -> dict[str, list]:
+    return {"pairs": [], "category_blocks": []}
 
 # One of these per tree per session — two nitrogen/potassium feeds is wrong.
 _EXCLUSIVE_CATEGORIES = frozenset({"fertilize", "spray", "mulch"})
@@ -63,7 +72,37 @@ def _blocks_category(task: Task, category: str | None) -> bool:
     return False
 
 
-def session_conflict_reason(a: Task, b: Task) -> str | None:
+def _constraint_reason(
+    a: Task, b: Task, constraints: SessionConstraints | None
+) -> str | None:
+    """Agronomist pairwise edges or extra category blocks (same tree only)."""
+    if not constraints:
+        return None
+    ids = {a.get("id"), b.get("id")}
+    for pair in constraints.get("pairs") or []:
+        if {pair.get("a"), pair.get("b")} == ids:
+            return str(pair.get("reason") or "").strip() or (
+                f"agronomist: cannot share a session with {_label(b)}"
+            )
+    ca, cb = _task_category(a), _task_category(b)
+    if not ca or not cb:
+        return None
+    cats = {ca.lower(), cb.lower()}
+    for block in constraints.get("category_blocks") or []:
+        left = str(block.get("category_a") or "").strip().lower()
+        right = str(block.get("category_b") or "").strip().lower()
+        if left and right and {left, right} == cats:
+            return str(block.get("reason") or "").strip() or (
+                f"agronomist: {ca} and {cb} cannot share a session"
+            )
+    return None
+
+
+def session_conflict_reason(
+    a: Task,
+    b: Task,
+    constraints: SessionConstraints | None = None,
+) -> str | None:
     """Why ``a`` and ``b`` cannot share a work session, or ``None`` if they can."""
     if a.get("id") is not None and a.get("id") == b.get("id"):
         return None
@@ -85,10 +124,13 @@ def session_conflict_reason(a: Task, b: Task) -> str | None:
             f"would block {_label(b)} "
             f"(cannot share a session)"
         )
-    return None
+    return _constraint_reason(a, b, constraints)
 
 
-def apply_session_conflicts(tasks: list[Task]) -> tuple[list[Task], list[Task]]:
+def apply_session_conflicts(
+    tasks: list[Task],
+    constraints: SessionConstraints | None = None,
+) -> tuple[list[Task], list[Task]]:
     """Keep the highest-scoring task in each same-session conflict group.
 
     Greedy: sort by effective score, keep a task only when it does not conflict
@@ -104,7 +146,7 @@ def apply_session_conflicts(tasks: list[Task]) -> tuple[list[Task], list[Task]]:
     for task in ordered:
         reason = None
         for other in kept:
-            reason = session_conflict_reason(task, other)
+            reason = session_conflict_reason(task, other, constraints)
             if reason:
                 break
         if reason:
@@ -112,6 +154,28 @@ def apply_session_conflicts(tasks: list[Task]) -> tuple[list[Task], list[Task]]:
         else:
             kept.append(task)
     return kept, dropped
+
+
+def conflicting_leftovers(
+    candidates: list[Task],
+    kept: list[Task],
+    constraints: SessionConstraints | None = None,
+) -> list[Task]:
+    """Tag eligible tasks left out because they conflict with the kept set."""
+    kept_ids = {t.get("id") for t in kept}
+    dropped: list[Task] = []
+    seen: set[Any] = set()
+    for task in candidates:
+        tid = task.get("id")
+        if tid is None or tid in kept_ids or tid in seen:
+            continue
+        for other in kept:
+            reason = session_conflict_reason(task, other, constraints)
+            if reason:
+                dropped.append({**task, "_drop_reason": reason})
+                seen.add(tid)
+                break
+    return dropped
 
 
 def ready_on(

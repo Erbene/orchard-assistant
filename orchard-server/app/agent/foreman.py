@@ -2,12 +2,14 @@
 
 A two-interrupt LangGraph negotiation:
 
-    time_check --(interrupt: available_minutes)--> propose
-    propose    --> resource_check --(interrupt: have_resources)--> finalize
-    finalize   --> review --> narrate --> END
+    time_check --(interrupt: available_minutes)--> constrain
+    constrain  --> propose --> resource_check --(interrupt: have_resources)
+    --> finalize --> narrate --> END
 
-The deterministic engine (``escalate`` / ``pack`` / ``resources_for`` /
-``refit``) does the scheduling; a local Ollama model only writes the
+The Agronomist emits leftover session constraints once (pairwise edges and
+extra category blocks). The deterministic engine (``escalate`` / ``pack`` /
+``resources_for`` / ``refit``) then packs under the union of those constraints
+and the built-in session rules. A local Ollama model also writes the
 human-readable session summary (with a template fallback so the flow always
 completes offline). **No node mutates the database** - the schedule is a
 proposal; tasks are only completed on an explicit user action (see
@@ -31,11 +33,14 @@ from ..config import Settings, get_settings
 from ..core.logging import get_logger
 from .escalation import Escalation, escalate
 from .ollama import chat_model
-from .agronomist import review_session_adversaries
+from .agronomist import emit_session_constraints
 from .schedule_rules import (
     Completion,
+    SessionConstraints,
     apply_blocks,
     apply_session_conflicts,
+    conflicting_leftovers,
+    empty_session_constraints,
     session_conflict_reason,
 )
 
@@ -73,8 +78,17 @@ def _by_score(tasks: list[Task]) -> list[Task]:
     return sorted(tasks, key=lambda t: t.get("_effective_score", 0.0), reverse=True)
 
 
-def pack(tasks: list[Task], minutes: int) -> list[Task]:
-    """Greedy knapsack: take tasks by value density until the budget is spent."""
+def pack(
+    tasks: list[Task],
+    minutes: int,
+    *,
+    constraints: SessionConstraints | None = None,
+) -> list[Task]:
+    """Greedy knapsack: take tasks by value density until the budget is spent.
+
+    Skips a candidate that conflicts with anything already picked (built-in
+    session rules plus Agronomist constraints).
+    """
     ordered = sorted(
         tasks, key=lambda t: t.get("_effective_score", 0.0) / _minutes(t), reverse=True
     )
@@ -82,9 +96,12 @@ def pack(tasks: list[Task], minutes: int) -> list[Task]:
     used = 0
     for task in ordered:
         cost = _minutes(task)
-        if used + cost <= minutes:
-            picked.append(task)
-            used += cost
+        if used + cost > minutes:
+            continue
+        if any(session_conflict_reason(task, kept, constraints) for kept in picked):
+            continue
+        picked.append(task)
+        used += cost
     return _by_score(picked)
 
 
@@ -108,6 +125,7 @@ def refit(
     minutes: int,
     *,
     blocked_ids: set[int] | None = None,
+    constraints: SessionConstraints | None = None,
 ) -> tuple[list[Task], list[Task]]:
     """Drop proposed tasks that need a tool the user lacks, then backfill the
     freed minutes from the rest of the backlog (also tool-free). Returns
@@ -140,7 +158,7 @@ def refit(
         cost = _minutes(task)
         if used + cost > minutes:
             continue
-        if any(session_conflict_reason(task, kept_task) for kept_task in kept):
+        if any(session_conflict_reason(task, kept_task, constraints) for kept_task in kept):
             continue
         kept.append(task)
         used += cost
@@ -241,6 +259,7 @@ class ForemanState(TypedDict, total=False):
     dropped_tasks: list[Task]
     blocked_tasks: list[Task]
     blocked_task_ids: set[int]
+    session_constraints: dict[str, list]
     escalations: list[Escalation]
     summary: str
     warnings: list[str]
@@ -278,29 +297,63 @@ def _time_check(state: ForemanState) -> dict:
     return {}
 
 
-def _propose(state: ForemanState) -> dict:
+def _constraints_of(state: ForemanState) -> dict[str, list]:
+    raw = state.get("session_constraints")
+    if not raw:
+        return empty_session_constraints()
+    return {
+        "pairs": list(raw.get("pairs") or []),
+        "category_blocks": list(raw.get("category_blocks") or []),
+    }
+
+
+def _merge_dropped(*groups: list[Task]) -> list[Task]:
+    by_id: dict[int, Task] = {}
+    for task in (t for group in groups for t in group):
+        tid = task.get("id")
+        if tid is None:
+            continue
+        by_id[tid] = task
+    return list(by_id.values())
+
+
+def _constrain(state: ForemanState, settings: Settings | None = None) -> dict:
+    """Escalate, apply completed-task blocks, emit leftover session constraints."""
+    settings = settings or get_settings()
     escalated, escalations = escalate(state.get("pending_tasks", []))
     completions = _completions_from_state(state.get("recent_completions", []))
     eligible, blocked = apply_blocks(escalated, completions, today=date.today())
-    blocked_ids = {t["id"] for t in blocked}
-    packed = pack(eligible, int(state["available_minutes"]))
-    proposed, conflicted = apply_session_conflicts(packed)
+    return {
+        "pending_tasks": escalated,
+        "blocked_tasks": blocked,
+        "blocked_task_ids": {t["id"] for t in blocked},
+        "session_constraints": emit_session_constraints(eligible, settings),
+        "escalations": escalations,
+        "dropped_tasks": blocked,
+    }
+
+
+def _propose(state: ForemanState) -> dict:
+    blocked = list(state.get("blocked_tasks") or [])
+    blocked_ids = set(state.get("blocked_task_ids") or {t["id"] for t in blocked})
+    constraints = _constraints_of(state)
+    eligible = [t for t in state.get("pending_tasks", []) if t["id"] not in blocked_ids]
+    packed = pack(eligible, int(state["available_minutes"]), constraints=constraints)
+    proposed, conflicted = apply_session_conflicts(packed, constraints)
     proposed, _ = refit(
         eligible,
         proposed,
         [],
         int(state["available_minutes"]),
         blocked_ids=blocked_ids | {t["id"] for t in conflicted},
+        constraints=constraints,
     )
-    proposed, extra = apply_session_conflicts(proposed)
+    proposed, extra = apply_session_conflicts(proposed, constraints)
+    leftovers = conflicting_leftovers(eligible, proposed, constraints)
     return {
-        "pending_tasks": escalated,
         "proposed_tasks": proposed,
-        "blocked_tasks": blocked,
-        "blocked_task_ids": blocked_ids,
-        "dropped_tasks": blocked + conflicted + extra,
+        "dropped_tasks": _merge_dropped(blocked, conflicted, extra, leftovers),
         "required_resources": resources_for(proposed),
-        "escalations": escalations,
     }
 
 
@@ -317,26 +370,31 @@ def _finalize(state: ForemanState) -> dict:
     missing = [r for r in state.get("required_resources", []) if r.strip().lower() not in confirmed]
     blocked = state.get("blocked_tasks") or []
     blocked_ids = set(state.get("blocked_task_ids") or {t["id"] for t in blocked})
+    constraints = _constraints_of(state)
+    eligible = [t for t in state.get("pending_tasks", []) if t["id"] not in blocked_ids]
     final, dropped = refit(
-        state.get("pending_tasks", []),
+        eligible,
         state.get("proposed_tasks", []),
         missing,
         int(state["available_minutes"]),
         blocked_ids=blocked_ids,
+        constraints=constraints,
     )
-    final, conflicted = apply_session_conflicts(final)
+    final, conflicted = apply_session_conflicts(final, constraints)
     if conflicted:
         final, more = refit(
-            state.get("pending_tasks", []),
+            eligible,
             final,
             missing,
             int(state["available_minutes"]),
             blocked_ids=blocked_ids | {t["id"] for t in dropped} | {t["id"] for t in conflicted},
+            constraints=constraints,
         )
         dropped = dropped + more
+    leftovers = conflicting_leftovers(eligible, final, constraints)
     kept_ids = {t["id"] for t in final}
     by_id: dict[int, Task] = {}
-    for task in list(state.get("dropped_tasks") or []) + blocked + dropped + conflicted:
+    for task in list(state.get("dropped_tasks") or []) + blocked + dropped + conflicted + leftovers:
         tid = task.get("id")
         if tid is None or tid in kept_ids:
             continue
@@ -345,22 +403,6 @@ def _finalize(state: ForemanState) -> dict:
         "proposed_tasks": final,
         "dropped_tasks": list(by_id.values()),
         "required_resources": resources_for(final),
-    }
-
-
-def _review_plan(state: ForemanState, settings: Settings | None = None) -> dict:
-    """Ask the agronomist whether any remaining pair is adversarial."""
-    settings = settings or get_settings()
-    proposed = list(state.get("proposed_tasks") or [])
-    extra = review_session_adversaries(proposed, settings)
-    if not extra:
-        return {}
-    drop_ids = {t["id"] for t in extra}
-    kept = [t for t in proposed if t["id"] not in drop_ids]
-    return {
-        "proposed_tasks": kept,
-        "dropped_tasks": list(state.get("dropped_tasks") or []) + extra,
-        "required_resources": resources_for(kept),
     }
 
 
@@ -374,16 +416,16 @@ def build_foreman_graph(checkpointer: Any, settings: Settings | None = None):
     app, ``MemorySaver`` in tests)."""
     g = StateGraph(ForemanState)
     g.add_node("time_check", _time_check)
+    g.add_node("constrain", lambda state: _constrain(state, settings))
     g.add_node("propose", _propose)
     g.add_node("resource_check", _resource_check)
     g.add_node("finalize", _finalize)
-    g.add_node("review", lambda state: _review_plan(state, settings))
     g.add_node("narrate", lambda state: _narrate_node(state, settings))
     g.add_edge(START, "time_check")
-    g.add_edge("time_check", "propose")
+    g.add_edge("time_check", "constrain")
+    g.add_edge("constrain", "propose")
     g.add_edge("propose", "resource_check")
     g.add_edge("resource_check", "finalize")
-    g.add_edge("finalize", "review")
-    g.add_edge("review", "narrate")
+    g.add_edge("finalize", "narrate")
     g.add_edge("narrate", END)
     return g.compile(checkpointer=checkpointer)

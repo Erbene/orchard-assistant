@@ -82,27 +82,27 @@ flowchart TD
 
   E --> E1["Escalate urgent tasks<br/>deterministic"]
   E1 --> E2["Apply biological-date blocks<br/>deterministic"]
-  E2 --> E3["Greedy knapsack pack<br/>deterministic"]
-  E3 --> E4["Apply same-session conflicts<br/>deterministic"]
-  E4 --> F{"resource_check<br/>deterministic"}
+  E2 --> E3["Emit session constraints<br/>Agronomist agent"]
+  E3 --> E4["Greedy knapsack pack<br/>deterministic"]
+  E4 --> E5["Apply same-session conflicts<br/>deterministic"]
+  E5 --> F{"resource_check<br/>deterministic"}
 
   F -->|interrupt| G["Grower confirms tools<br/>grower"]
   G --> H["finalize / refit<br/>deterministic"]
   F -->|nothing required| H
-  H --> H1["review adversarial pairs<br/>Agronomist agent"]
-  H1 --> I["narrate briefing<br/>Foreman agent"]
+  H --> I["narrate briefing<br/>Foreman agent"]
   I --> J["Review proposed session<br/>grower"]
   J -->|complete or report| K["Write task outcomes<br/>deterministic"]
 
   classDef agent fill:#e7f2ea,stroke:#3d6b4f,color:#1a2e22
   classDef det fill:#f3f4f6,stroke:#9ca3af,color:#374151
   classDef human fill:#fff7e0,stroke:#c4a035,color:#5c4a12
-  class H1,I agent
-  class B,C,E,E1,E2,E3,E4,F,H,K det
+  class E3,I agent
+  class B,C,E,E1,E2,E4,E5,F,H,K det
   class A,D,G,J human
 ```
 
-Escalation, completed-task blocks, same-session conflicts (one fertilize, spray, or mulch job per tree), packing, and refitting are deterministic Python. The Agronomist then reviews the packed set for leftover adversarial pairs. The checkpointed graph can pause for time and tool answers; planning itself does not modify task records. The Foreman agent only writes the owner-facing briefing (template fallback if Ollama is down).
+Escalation, completed-task blocks, same-session conflicts (one fertilize, spray, or mulch job per tree), packing, and refitting are deterministic Python. The Agronomist emits leftover pairwise or category constraints once; knapsack and refit then solve under those constraints. The checkpointed graph can pause for time and tool answers; planning itself does not modify task records. The Foreman agent only writes the owner-facing briefing (template fallback if Ollama is down).
 
 ### 3. Irrigation Supervisor — proposal and approval
 
@@ -149,7 +149,7 @@ The solver evaluates every zone, including mixed-species contention. Every actio
 
 | Layer | Owns |
 | ----- | ---- |
-| **LLM (Ollama)** | Intent routing, cited prose, negotiation narration, plan summaries |
+| **LLM (Ollama)** | Intent routing, cited prose, leftover session constraints, negotiation narration, plan summaries |
 | **Deterministic Python** | Water balance, duration beam search, two-day irrigation gap, biological calendar dates, escalation weights, knapsack packing |
 | **Grower** | Available time, tools on hand, source priority order, and irrigation approval |
 

@@ -352,7 +352,8 @@ general-knowledge block). The tool surface from chat is **router +
 `ChatOllama` call and LangGraph run streams to LangSmith. `app/core/tracing.py`
 adds named spans for the steps LangChain doesn't auto-instrument —
 `kb.search` (the Chroma retrieval, `run_type="retriever"`), `agronomist.answer`,
-`agronomist.care_plan`, `orchestrator.classify` — so an agronomy trace reads
+`agronomist.care_plan`, `agronomist.session_constraints`, `orchestrator.classify`
+— so an agronomy trace reads
 `agronomist.answer › [kb.search, ChatOllama]` instead of two disconnected LLM
 calls. Wiring / secret args (`settings`, `sources`, the DB connection) are
 stripped from logged inputs. Tests force tracing off (`conftest.py`).
@@ -363,8 +364,8 @@ stripped from logged inputs. Tests force tracing off (`conftest.py`).
 LangGraph negotiation** driven over REST:
 
 ```
-time_check --(interrupt: available_minutes)--> propose --> resource_check
-  --(interrupt: have_resources)--> finalize --> review --> narrate --> END
+time_check --(interrupt: available_minutes)--> constrain --> propose
+  --> resource_check --(interrupt: have_resources)--> finalize --> narrate --> END
 ```
 
 - **Deterministic engine** (`escalate` / `apply_blocks` / `apply_session_conflicts`
@@ -373,13 +374,16 @@ time_check --(interrupt: available_minutes)--> propose --> resource_check
   `priority_score` of dangerously-overdue tasks (keyword rules table +
   generic >14-day fallback). [app/agent/schedule_rules.py](app/agent/schedule_rules.py)
   applies completed-task `blocks` and **same-session conflicts** (one
-  fertilize, spray, or mulch job per tree; prospective PHI blocks). A greedy
-  knapsack packs the budget, the union of `required_resources` is asked about,
-  and tasks needing a missing tool are dropped + the freed time backfilled —
-  never with a conflicting sibling. **No node writes the DB.**
-- **Agronomist review**: after finalize, `review_session_adversaries` asks the
-  Agronomist whether any remaining pair on the same tree is adversarial.
-  Offline / model-down → empty extra drops; the deterministic rules still hold.
+  fertilize, spray, or mulch job per tree; prospective PHI blocks; Agronomist
+  pairwise edges and extra category blocks). A greedy knapsack packs the
+  budget under those constraints, the union of `required_resources` is asked
+  about, and tasks needing a missing tool are dropped + the freed time
+  backfilled — never with a conflicting sibling. **No node writes the DB.**
+- **Agronomist constraints**: before packing, `emit_session_constraints` asks
+  the Agronomist for leftover same-tree pairs and category blocks the
+  built-in rules do not cover. One LLM call; knapsack and refit then solve
+  once. Offline / model-down → empty extra constraints; the deterministic
+  rules still hold.
 - **Narration**: a local **Ollama** model (`FOREMAN_MODEL`, default
   `qwen2.5:7b-instruct`) narrates the deterministic selection as an
   owner-facing work-session briefing. Optional — falls back to a template when
