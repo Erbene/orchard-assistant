@@ -112,12 +112,10 @@ class CarePlanService:
             ("expected_harvest_months", "expected_harvest_month", "harvest_months"),
             ("expected_dormancy_months", "expected_dormancy_month", "dormancy_months"),
         ):
-            existing = tree.get(plural) or []
-            if not existing and tree.get(singular) is None:
-                months = _normalize_month_list(draft.get(key) or [])
-                if months:
-                    phenology_patch[plural] = months
-                    phenology_patch[singular] = months[0]
+            months = _normalize_month_list(draft.get(key) or [])
+            if months:
+                phenology_patch[plural] = months
+                phenology_patch[singular] = months[0]
         if phenology_patch:
             tree = await self._trees.update(tree_id, phenology_patch) or tree
 

@@ -591,6 +591,37 @@ def test_delete_template_removes_its_open_task():
     _run(body)
 
 
+def test_generate_writes_and_replaces_phenology():
+    first = _DRAFT.model_copy(update={
+        "expected_flowering_months": [1, 2],
+        "expected_harvest_months": [7],
+        "expected_dormancy_months": [12],
+    })
+    second = _DRAFT.model_copy(update={
+        "expected_flowering_months": [3, 9],
+        "expected_harvest_months": [6, 11],
+        "expected_dormancy_months": [1],
+    })
+
+    async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
+        tid = (await trees.create({"species": "mango", "variety": "Kent"}))["tree_id"]
+        await _link_note(svc, tid)
+        with fake_plan_llm(first):
+            plan = await svc.generate(tid)
+        assert plan.phenology.flowering_months == [1, 2]
+        assert plan.phenology.harvest_months == [7]
+        assert plan.phenology.dormancy_months == [12]
+        row = await trees.get(tid)
+        assert row["expected_flowering_months"] == [1, 2]
+        with fake_plan_llm(second):
+            again = await svc.generate(tid)
+        assert again.phenology.flowering_months == [3, 9]
+        assert again.phenology.harvest_months == [6, 11]
+        assert again.phenology.dormancy_months == [1]
+
+    _run(body)
+
+
 def test_update_tree_phenology_month_lists():
     async def body(conn, trees, templates, tasks_repo, svc, tasks_svc):
         tid = (await trees.create(

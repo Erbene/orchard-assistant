@@ -55,7 +55,9 @@ export function CarePlanTab({
   const generate = React.useCallback(async () => {
     setGenerating(true);
     try {
-      setPlan(await carePlanApi.generate(treeId));
+      const p = await carePlanApi.generate(treeId);
+      setPlan(p);
+      setTree(await treesApi.get(treeId));
       toast.success("Care plan generated", "Review and adjust the tasks below.");
     } catch (err) {
       toast.error(
