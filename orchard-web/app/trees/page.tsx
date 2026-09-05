@@ -19,6 +19,7 @@ import { treeColumns } from "@/components/trees/columns";
 import type { ZoneOption } from "@/components/forms/tree-entity-form";
 import { ApiError, treesApi, zonesApi } from "@/lib/api";
 import type { RachioZone, Tree } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 
 export default function TreesPage() {
   const toast = useToast();
@@ -52,7 +53,10 @@ export default function TreesPage() {
       setZones(devices.flatMap((d) => d.zones));
       setZoneOptions(
         devices.flatMap((d) =>
-          d.zones.map((z) => ({ id: z.id, label: `${d.name} · ${z.name}` })),
+          d.zones.map((z) => ({
+            id: z.id,
+            label: `${d.name} · ${zoneDisplayName(z) ?? z.id}`,
+          })),
         ),
       );
     } catch {
@@ -78,8 +82,12 @@ export default function TreesPage() {
     [zones],
   );
 
-  const zoneLabel = (id: string | null) =>
-    !id ? null : (zones.find((z) => z.id === id)?.name ?? id);
+  const zoneLabel = (tree: Tree) =>
+    tree.zone_display_name ??
+    zoneDisplayName(
+      tree.zone_id ? zones.find((z) => z.id === tree.zone_id) : null,
+      tree.zone_id,
+    );
 
   return (
     <div className="flex h-full flex-col">
@@ -151,7 +159,7 @@ export default function TreesPage() {
                 ["ID", `#${viewing.tree_id}`],
                 ["Species", viewing.species],
                 ["Variety", viewing.variety],
-                ["Zone", zoneLabel(viewing.zone_id)],
+                ["Zone", zoneLabel(viewing)],
                 ["Planted date", viewing.planted_date],
                 [
                   "Age",

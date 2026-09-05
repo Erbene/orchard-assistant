@@ -24,6 +24,10 @@ export interface RachioZone {
   custom_slope: RachioCustom | null;
   custom_crop: RachioCustom | null; // vegetation type
   custom_shade: RachioCustom | null; // sun exposure
+  /** Local grower label (not stored in Rachio). */
+  label?: string | null;
+  /** Label if set, otherwise `Zone {zone_number}`. */
+  display_name?: string | null;
   [key: string]: unknown;
 }
 
@@ -67,6 +71,8 @@ export interface Tree {
   has_care_plan: boolean;
   age_days: number | null;
   age_years: number | null;
+  zone_label?: string | null;
+  zone_display_name?: string | null;
 }
 
 export interface TreeInput {
@@ -269,6 +275,9 @@ export interface ZoneConfig {
   baseline_minutes: number;
   supervised: boolean;
   tree_count: number;
+  label?: string | null;
+  display_name?: string | null;
+  zone_number?: number | null;
 }
 
 export interface SupervisorConfig {
@@ -341,6 +350,9 @@ export interface SensorZoneRead {
   deficit_score: number;
   baseline_minutes: number;
   trees: SensorTreeRead[];
+  label?: string | null;
+  display_name?: string | null;
+  zone_number?: number | null;
 }
 
 export interface SensorSnapshot {
@@ -414,6 +426,9 @@ export type ProposalStatus =
 export interface SupervisorProposal {
   thread_id: string;
   zone_id: string;
+  label?: string | null;
+  display_name?: string | null;
+  zone_number?: number | null;
   for_date: string;
   status: ProposalStatus;
   action: IrrigationActionType;

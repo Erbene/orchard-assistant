@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, status
 
-from ...dependencies import get_source_service, get_tree_service
+from ...dependencies import get_source_service, get_tree_service, get_zone_service
 from ...schemas.source import SourceRead, TreeSourcesUpdate
 from ...schemas.tree import TreeCreate, TreeRead, TreeUpdate
 from ...services.source_service import SourceService
 from ...services.tree_service import TreeService
+from ...services.zone_service import ZoneService
 
 router = APIRouter(prefix="/trees", tags=["trees"])
 
@@ -17,20 +18,29 @@ async def list_trees(
     species: str | None = Query(default=None),
     zone_id: str | None = Query(default=None),
     service: TreeService = Depends(get_tree_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await service.list_trees(species=species, zone_id=zone_id)
+    return await zones.enrich_trees(
+        await service.list_trees(species=species, zone_id=zone_id)
+    )
 
 
 @router.get("/{tree_id}", response_model=TreeRead)
-async def get_tree(tree_id: int, service: TreeService = Depends(get_tree_service)):
-    return await service.get_tree(tree_id)
+async def get_tree(
+    tree_id: int,
+    service: TreeService = Depends(get_tree_service),
+    zones: ZoneService = Depends(get_zone_service),
+):
+    return await zones.enrich_tree(await service.get_tree(tree_id))
 
 
 @router.post("", response_model=TreeRead, status_code=status.HTTP_201_CREATED)
 async def create_tree(
-    payload: TreeCreate, service: TreeService = Depends(get_tree_service)
+    payload: TreeCreate,
+    service: TreeService = Depends(get_tree_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await service.create_tree(payload)
+    return await zones.enrich_tree(await service.create_tree(payload))
 
 
 @router.patch("/{tree_id}", response_model=TreeRead)
@@ -38,8 +48,9 @@ async def update_tree(
     tree_id: int,
     payload: TreeUpdate,
     service: TreeService = Depends(get_tree_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await service.update_tree(tree_id, payload)
+    return await zones.enrich_tree(await service.update_tree(tree_id, payload))
 
 
 @router.delete(

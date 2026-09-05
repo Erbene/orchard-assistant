@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, irrigationApi } from "@/lib/api";
 import type { SupervisorConfig, ZoneConfig } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 
 export function ScheduleConfig({
   zones,
@@ -121,7 +122,9 @@ function ZoneRow({ zone, onSaved }: { zone: ZoneConfig; onSaved: () => void }) {
   return (
     <li className="flex flex-wrap items-end gap-4 px-4 py-3">
       <div className="min-w-32">
-        <p className="text-sm font-medium">Zone {zone.zone_id}</p>
+        <p className="text-sm font-medium">
+          {zoneDisplayName(zone) ?? `Zone ${zone.zone_id}`}
+        </p>
         <p className="text-xs text-muted-foreground">
           {zone.tree_count} tree{zone.tree_count === 1 ? "" : "s"}
         </p>

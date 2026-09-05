@@ -1,15 +1,31 @@
 """Zone transport models.
 
-Zones are the grower's **Rachio** irrigation zones, read live and **read-only**
-(all configuration is edited in the Rachio app). The rich device/zone objects
-are ``RachioDevice`` / ``RachioZone`` in ``app/services/rachio.py``; this
-module only adds the request/response wrappers the router needs.
+Zone hardware/config lives in Rachio (read-only here). The local ``zone``
+table stores an optional grower label; display falls back to the Rachio zone
+number.
 """
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 from ..services.rachio import RachioZone
+
+
+class ZoneLabelUpdate(BaseModel):
+    """Set or clear the local grower label for a Rachio zone."""
+
+    label: str | None = Field(
+        default=None,
+        max_length=80,
+        description="Display label. Empty or null clears it (fallback to zone number).",
+    )
+
+
+class ZoneLabelRead(BaseModel):
+    zone_id: str
+    label: str | None = None
+    display_name: str
+    zone_number: int | None = None
 
 
 class ZoneDetail(BaseModel):

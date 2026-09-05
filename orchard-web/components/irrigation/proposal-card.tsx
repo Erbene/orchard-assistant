@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { ApiError, irrigationApi } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { ProposalStatus, SupervisorProposal } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 
 const ACTION_LABEL: Record<string, string> = {
   skip_schedule: "Skip the baseline schedule",
@@ -69,7 +70,9 @@ export function ProposalCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Droplet className="size-4 text-primary" />
-          <span className="font-medium">Zone {proposal.zone_id}</span>
+          <span className="font-medium">
+            {zoneDisplayName(proposal) ?? `Zone ${proposal.zone_id}`}
+          </span>
           <span className="text-xs text-muted-foreground">
             · {new Date(proposal.for_date).toLocaleDateString()}
           </span>

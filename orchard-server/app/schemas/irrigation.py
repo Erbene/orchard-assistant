@@ -208,6 +208,9 @@ class SupervisorProposal(BaseModel):
 
     thread_id: str
     zone_id: str
+    label: str | None = None
+    display_name: str | None = None
+    zone_number: int | None = None
     for_date: date
     status: str
     action: str
@@ -229,6 +232,9 @@ class ZoneConfig(BaseModel):
     baseline_minutes: int = 20
     supervised: bool = True
     tree_count: int = 0                     # filled by the overview endpoint
+    label: str | None = None
+    display_name: str | None = None
+    zone_number: int | None = None
 
 
 class ZoneConfigUpdate(BaseModel):
@@ -313,6 +319,9 @@ class SensorZoneRead(BaseModel):
     deficit_score: float = 0.0
     baseline_minutes: int = 20
     trees: list[SensorTreeRead] = Field(default_factory=list)
+    label: str | None = None
+    display_name: str | None = None
+    zone_number: int | None = None
 
 
 class SensorSnapshot(BaseModel):

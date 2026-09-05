@@ -33,6 +33,7 @@ from .repositories.executed_task_log_repository import ExecutedTaskLogRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.task_template_repository import TaskTemplateRepository
 from .repositories.tree_repository import TreeRepository
+from .repositories.zone_repository import ZoneRepository
 from .agent.checkpointer import ensure_foreman_graph, ensure_irrigation_graph
 from .services.chat_service import ChatService
 from .services.foreman_service import ForemanService
@@ -49,6 +50,7 @@ from .services.water_balance import WaterBalanceService
 from .services.task_service import TaskService
 from .services.tree_service import TreeService
 from .services.validators import ValidationAgent, get_default_validation_agent
+from .services.zone_service import ZoneService
 
 
 def get_settings_dep() -> Settings:
@@ -66,6 +68,10 @@ async def get_connection(
 
 def get_tree_repository(conn: AsyncConnection = Depends(get_connection)) -> TreeRepository:
     return TreeRepository(conn)
+
+
+def get_zone_repository(conn: AsyncConnection = Depends(get_connection)) -> ZoneRepository:
+    return ZoneRepository(conn)
 
 
 def get_executed_task_log_repository(
@@ -135,6 +141,13 @@ def get_tree_service(
     validator: ValidationAgent = Depends(get_validation_agent),
 ) -> TreeService:
     return TreeService(trees, validator)
+
+
+def get_zone_service(
+    zones: ZoneRepository = Depends(get_zone_repository),
+    settings: Settings = Depends(get_settings_dep),
+) -> ZoneService:
+    return ZoneService(zones, settings)
 
 
 def get_task_service(

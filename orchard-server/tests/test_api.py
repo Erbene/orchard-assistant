@@ -44,6 +44,9 @@ _ACCOUNT = {
 def _mock_rachio() -> None:
     respx.get(f"{RACHIO}/person/info").mock(return_value=httpx.Response(200, json=_PERSON))
     respx.get(f"{RACHIO}/person/p1").mock(return_value=httpx.Response(200, json=_ACCOUNT))
+    respx.get(f"{RACHIO}/zone/rz-1").mock(
+        return_value=httpx.Response(200, json={"id": "rz-1", "name": "Row A"})
+    )
     respx.put(f"{RACHIO}/zone/start").mock(return_value=httpx.Response(204))
 
 

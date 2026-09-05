@@ -16,6 +16,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { ApiError, zonesApi } from "@/lib/api";
 import type { RachioCustom, RachioDevice, RachioZone } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 
 const RACHIO_APP_URL = "https://app.rach.io";
 
@@ -55,7 +56,8 @@ export default function ZonesPage() {
         <div>
           <h1 className="text-lg font-semibold">Irrigation zones</h1>
           <p className="text-sm text-muted-foreground">
-            Live from your Rachio account · read-only
+            Live from your Rachio account. Add a local label — Rachio has no
+            equivalent field.
           </p>
         </div>
         <Button
@@ -73,9 +75,10 @@ export default function ZonesPage() {
         <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <Info className="mt-0.5 size-4 shrink-0 text-primary" />
           <p className="text-muted-foreground">
-            Zone configuration (names, vegetation type, soil, nozzles, slope,
-            sun exposure) is <strong className="text-foreground">read-only</strong>{" "}
-            here. To change any of it, use the official{" "}
+            Zone hardware settings (Rachio name, vegetation type, soil, nozzles,
+            slope, sun exposure) are{" "}
+            <strong className="text-foreground">read-only</strong> here. To
+            change any of it, use the official{" "}
             <a
               href={RACHIO_APP_URL}
               target="_blank"
@@ -133,7 +136,8 @@ export default function ZonesPage() {
                   <thead className="text-left text-xs text-muted-foreground">
                     <tr className="[&>th]:px-4 [&>th]:py-2 [&>th]:font-medium">
                       <th>#</th>
-                      <th>Zone</th>
+                      <th>Label</th>
+                      <th>Rachio name</th>
                       <th>Vegetation</th>
                       <th>Soil</th>
                       <th>Nozzle</th>
@@ -152,7 +156,32 @@ export default function ZonesPage() {
                           {zone.zone_number}
                         </td>
                         <td>
-                          <span className="font-medium">{zone.name}</span>
+                          <ZoneLabelEditor
+                            zone={zone}
+                            onSaved={(label, displayName) => {
+                              setDevices((prev) =>
+                                prev.map((d) =>
+                                  d.id !== device.id
+                                    ? d
+                                    : {
+                                        ...d,
+                                        zones: d.zones.map((z) =>
+                                          z.id === zone.id
+                                            ? {
+                                                ...z,
+                                                label,
+                                                display_name: displayName,
+                                              }
+                                            : z,
+                                        ),
+                                      },
+                                ),
+                              );
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <span className="text-muted-foreground">{zone.name}</span>
                           {!zone.enabled && (
                             <Badge variant="muted" className="ml-2">
                               disabled
@@ -234,7 +263,7 @@ function WaterZoneDialog({
     setSubmitting(true);
     try {
       await zonesApi.water(zone.id, minutes);
-      onDone(zone.name, minutes);
+      onDone(zoneDisplayName(zone) ?? zone.name, minutes);
       onClose();
     } catch (err) {
       onError(err instanceof ApiError ? err.detail : undefined);
@@ -247,7 +276,7 @@ function WaterZoneDialog({
     <Dialog open={zone !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Water “{zone?.name}”</DialogTitle>
+          <DialogTitle>Water “{zone ? zoneDisplayName(zone) : ""}”</DialogTitle>
           <DialogDescription>
             Starts a manual run on this Rachio zone now. This turns on real
             irrigation hardware.
@@ -281,3 +310,54 @@ function WaterZoneDialog({
     </Dialog>
   );
 }
+
+function ZoneLabelEditor({
+  zone,
+  onSaved,
+}: {
+  zone: RachioZone;
+  onSaved: (label: string | null, displayName: string) => void;
+}) {
+  const toast = useToast();
+  const [value, setValue] = React.useState(zone.label ?? "");
+  const [saving, setSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setValue(zone.label ?? "");
+  }, [zone.label, zone.id]);
+
+  async function save() {
+    const next = value.trim() || null;
+    if (next === (zone.label?.trim() || null)) return;
+    setSaving(true);
+    try {
+      const saved = await zonesApi.setLabel(zone.id, next);
+      onSaved(saved.label, saved.display_name);
+    } catch (err) {
+      toast.error(
+        "Could not save label",
+        err instanceof ApiError ? err.detail : undefined,
+      );
+      setValue(zone.label ?? "");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Input
+      className="h-8 w-44"
+      value={value}
+      disabled={saving}
+      placeholder={zoneDisplayName({ zone_number: zone.zone_number }, zone.id) ?? ""}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => void save()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+

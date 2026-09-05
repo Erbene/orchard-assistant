@@ -184,6 +184,8 @@ class TreeRead(BaseModel):
     has_care_plan: bool = False   # only the list endpoint sets this
     age_days: int | None = None
     age_years: float | None = None
+    zone_label: str | None = None
+    zone_display_name: str | None = None
 
     @model_validator(mode="before")
     @classmethod

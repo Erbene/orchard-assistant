@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, irrigationApi } from "@/lib/api";
 import type { SensorOverridesIn, SensorSnapshot, SensorTreeRead } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 import { cn } from "@/lib/utils";
 
 function fmt(n: number | null | undefined, digits = 1): string {
@@ -252,8 +253,7 @@ export function SensorsPanel({
           <section key={zone.zone_id} className="overflow-hidden rounded-lg border">
             <header className="flex flex-wrap items-center gap-3 border-b bg-muted/30 px-4 py-3">
               <h3 className="font-medium">
-                Zone{" "}
-                <code className="text-xs text-muted-foreground">{zone.zone_id}</code>
+                {zoneDisplayName(zone) ?? `Zone ${zone.zone_id}`}
               </h3>
               <Badge variant="outline">Deficit {fmt(zone.deficit_score)}</Badge>
               <Badge variant="muted">{zone.baseline_minutes} min baseline</Badge>

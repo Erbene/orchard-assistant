@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ClipboardList, Library } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { RachioZone, Tree } from "@/lib/types";
+import { zoneDisplayName } from "@/lib/zone-label";
 import { Button } from "@/components/ui/button";
 import { RowActions, type RowActionHandlers } from "@/components/data-table/row-actions";
 import {
@@ -17,9 +18,13 @@ export function treeColumns(
   zones: RachioZone[],
   actions: RowActionHandlers<Tree>,
 ): ColumnDef<Tree>[] {
-  const zoneLabel = (id: string | null) => {
-    if (!id) return null;
-    return zones.find((z) => z.id === id)?.name ?? id;
+  const zoneLabel = (tree: Tree) => {
+    if (tree.zone_display_name) return tree.zone_display_name;
+    if (!tree.zone_id) return null;
+    return zoneDisplayName(
+      zones.find((z) => z.id === tree.zone_id),
+      tree.zone_id,
+    );
   };
 
   return [
@@ -39,8 +44,8 @@ export function treeColumns(
     {
       id: "zone",
       header: "Zone",
-      accessorFn: (t) => zoneLabel(t.zone_id) ?? "",
-      cell: ({ row }) => <NullableText value={zoneLabel(row.original.zone_id)} />,
+      accessorFn: (t) => zoneLabel(t) ?? "",
+      cell: ({ row }) => <NullableText value={zoneLabel(row.original)} />,
     },
     {
       accessorKey: "planted_date",

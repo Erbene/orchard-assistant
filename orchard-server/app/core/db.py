@@ -74,10 +74,16 @@ async def connection(settings: Settings) -> AsyncIterator[AsyncConnection]:
 _STARTUP_DDL: tuple[str, ...] = (
     "ALTER TABLE tree_sources ADD COLUMN IF NOT EXISTS priority_order INT NOT NULL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS idx_tree_sources_priority ON tree_sources (tree_id, priority_order)",
-    # zones moved to Rachio: drop the FK + local table, tree.zone_id -> text
+    # zones moved to Rachio: drop the FK, tree.zone_id -> text. Local ``zone``
+    # is now a label overlay (do not DROP — that would wipe grower labels).
     "ALTER TABLE tree DROP CONSTRAINT IF EXISTS tree_zone_id_fkey",
     "ALTER TABLE tree ALTER COLUMN zone_id TYPE text USING zone_id::text",
-    "DROP TABLE IF EXISTS zone CASCADE",
+    (
+        "CREATE TABLE IF NOT EXISTS zone ("
+        " zone_id TEXT PRIMARY KEY,"
+        " label TEXT,"
+        " updated_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+    ),
     # assistant chat history (server-owned conversation threads)
     (
         "CREATE TABLE IF NOT EXISTS conversation ("

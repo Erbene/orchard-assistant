@@ -48,7 +48,8 @@ export function TreeHeader({ treeId }: { treeId: number }) {
       </h1>
       <p className="text-sm text-muted-foreground">
         Tree #{tree.tree_id}
-        {tree.zone_id != null && ` · zone #${tree.zone_id}`}
+        {tree.zone_id != null &&
+          ` · ${tree.zone_display_name ?? `Zone ${tree.zone_id}`}`}
         {age && ` · ${age}`}
       </p>
     </div>

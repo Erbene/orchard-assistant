@@ -154,14 +154,21 @@ export const apiClient = {
 // --------------------------------------------------------------------------
 
 /**
- * Rachio irrigation zones. Read-only except `water` (a manual run) — there is
- * deliberately no create / update / delete. Zone config is edited in the
- * Rachio app.
+ * Rachio irrigation zones, plus a local grower label (Rachio has no label field).
+ * Hardware/config is still edited in the Rachio app; `setLabel` and `water`
+ * are the local writes.
  */
 export const zonesApi = {
   list: () => apiClient.get<RachioDevice[]>(`${API_PREFIX}/zones`),
   get: (zoneId: string) =>
     apiClient.get<ZoneDetail>(`${API_PREFIX}/zones/${encodeURIComponent(zoneId)}`),
+  setLabel: (zoneId: string, label: string | null) =>
+    apiClient.put<{
+      zone_id: string;
+      label: string | null;
+      display_name: string;
+      zone_number: number | null;
+    }>(`${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/label`, { label }),
   water: (zoneId: string, durationMinutes: number) =>
     apiClient.post<{ status: string }>(
       `${API_PREFIX}/zones/${encodeURIComponent(zoneId)}/water`,
@@ -256,7 +263,7 @@ export const irrigationApi = {
     ),
   updateZone: (
     zoneId: string,
-    patch: Partial<Omit<ZoneConfig, "zone_id" | "tree_count">>,
+    patch: Partial<Omit<ZoneConfig, "zone_id" | "tree_count" | "label" | "display_name" | "zone_number">>,
   ) =>
     apiClient.put<ZoneConfig>(
       `${API_PREFIX}/irrigation/config/zones/${encodeURIComponent(zoneId)}`,

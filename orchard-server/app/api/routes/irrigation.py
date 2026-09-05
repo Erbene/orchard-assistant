@@ -24,6 +24,7 @@ from ...dependencies import (
     get_sensor_board_service,
     get_settings_dep,
     get_tree_repository,
+    get_zone_service,
 )
 from ...irrigation import demo
 from ...irrigation.sensors import MoistureSensorService
@@ -47,6 +48,7 @@ from ...services.irrigation_service import (
     IrrigationSupervisorService,
 )
 from ...services.sensor_board import SensorBoardService
+from ...services.zone_service import ZoneService
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/irrigation", tags=["irrigation"])
@@ -60,9 +62,11 @@ class _RunRequest(BaseModel):
 async def overview(
     svc: IrrigationConfigService = Depends(get_irrigation_config_service),
     settings: Settings = Depends(get_settings_dep),
+    zones: ZoneService = Depends(get_zone_service),
 ):
     ov = await svc.overview()
-    return ov.model_copy(update={"demo_enabled": settings.orchard_demo})
+    ov = ov.model_copy(update={"demo_enabled": settings.orchard_demo})
+    return await zones.enrich_overview(ov)
 
 
 @router.put("/config/supervisor", response_model=SupervisorConfig)
@@ -78,47 +82,55 @@ async def update_zone_config(
     zone_id: str,
     payload: ZoneConfigUpdate,
     svc: IrrigationConfigService = Depends(get_irrigation_config_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await svc.update_zone(zone_id, payload)
+    return await zones.enrich_zone_config(await svc.update_zone(zone_id, payload))
 
 
 @router.post("/supervisor/run", response_model=SupervisorRunResult)
 async def run_supervisor(
     payload: _RunRequest | None = None,
     svc: IrrigationSupervisorService = Depends(get_irrigation_supervisor_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await svc.run(zone_ids=(payload.zone_ids if payload else None))
+    return await zones.enrich_run(
+        await svc.run(zone_ids=(payload.zone_ids if payload else None))
+    )
 
 
 @router.get("/proposals", response_model=list[SupervisorProposal])
 async def list_proposals(
     status: str | None = None,
     svc: IrrigationSupervisorService = Depends(get_irrigation_supervisor_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await svc.list_proposals(status=status)
+    return await zones.enrich_proposals(await svc.list_proposals(status=status))
 
 
 @router.post("/proposals/{thread_id}/approve", response_model=SupervisorProposal)
 async def approve_proposal(
     thread_id: str,
     svc: IrrigationSupervisorService = Depends(get_irrigation_supervisor_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await svc.approve(thread_id)
+    return await zones.enrich_proposal(await svc.approve(thread_id))
 
 
 @router.post("/proposals/{thread_id}/reject", response_model=SupervisorProposal)
 async def reject_proposal(
     thread_id: str,
     svc: IrrigationSupervisorService = Depends(get_irrigation_supervisor_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await svc.reject(thread_id)
+    return await zones.enrich_proposal(await svc.reject(thread_id))
 
 
 @router.get("/sensors", response_model=SensorSnapshot)
 async def sensor_snapshot(
     board: SensorBoardService = Depends(get_sensor_board_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
-    return await board.snapshot()
+    return await zones.enrich_snapshot(await board.snapshot())
 
 
 @router.put("/sensors/overrides", response_model=SensorSnapshot)
@@ -126,9 +138,10 @@ async def apply_sensor_overrides(
     payload: SensorOverridesIn,
     settings: Settings = Depends(get_settings_dep),
     board: SensorBoardService = Depends(get_sensor_board_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
     _require_demo(settings)
-    return await board.apply_overrides(payload)
+    return await zones.enrich_snapshot(await board.apply_overrides(payload))
 
 
 def _require_demo(settings: Settings) -> None:
@@ -150,10 +163,11 @@ async def demo_catalog(settings: Settings = Depends(get_settings_dep)):
 async def reset_demo_pins(
     settings: Settings = Depends(get_settings_dep),
     board: SensorBoardService = Depends(get_sensor_board_service),
+    zones: ZoneService = Depends(get_zone_service),
 ):
     _require_demo(settings)
     demo.reset()
-    return await board.snapshot()
+    return await zones.enrich_snapshot(await board.snapshot())
 
 
 @router.post("/demo/{scenario_id}/apply", response_model=DemoApplyResult)
